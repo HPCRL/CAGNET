@@ -1,13 +1,4 @@
-# CAGNET: Communication-Avoiding Graph Neural nETworks
-
-## Description
-
-CAGNET is a family of parallel algorithms for training GNNs that can asymptotically reduce communication compared to previous parallel GNN training methods. CAGNET algorithms are based on 1D, 1.5D, 2D, and 3D sparse-dense matrix multiplication, and are implemented with `torch.distributed` on GPU-equipped clusters. We also implement these parallel algorithms on a 2-layer GCN.
-
-
-For more information, please read our ACM/IEEE SC'20 paper [Reducing Communication in Graph Neural Network Training](https://arxiv.org/pdf/2005.03300.pdf).
-
-**Contact:** Alok Tripathy (<alokt@berkeley.edu>)
+# Forked CAGNET: Communication-Avoiding Graph Neural nETworks
 
 ## Dependencies
 - Python 3.6.10
@@ -15,6 +6,16 @@ For more information, please read our ACM/IEEE SC'20 paper [Reducing Communicati
 - PyTorch Geometric (PyG) 1.3.2
 - CUDA 10.1
 - GCC 6.4.0
+
+Newer packages also working, tested on KP360: 
+- Python 3.7.11
+- torch                   1.9.1+cu111
+- torch-cluster           1.5.9
+- torch-geometric         2.0.1
+- torch-scatter           2.0.8
+- torch-sparse            0.6.12
+- CUDA 11.0
+- GCC 9.2.0
 
 On OLCF Summit, all of these dependencies can be accessed with the following
 ```bash
@@ -30,6 +31,7 @@ pip install --no-cache-dir torch-sparse==0.4.3
 pip install --no-cache-dir torch-cluster==1.4.5
 pip install --no-cache-dir torch-geometric==1.3.2
 ```
+It's sometimes tricky to install pytorch-geometric... Even after installing them, there could be some error importing GCNConv. As this GCNConv isn't used, I think this line can be deleted.
 
 ## Compiling
 
@@ -39,6 +41,16 @@ This code uses C++ extensions. To compile these, run
 cd sparse-extension
 python setup.py install
 ```
+
+If Ninja doesn't compile because cuda_runtime_api.h is not found, please check CUDA-related environment variables. For example
+'''
+export CUDA_HOME=$HOME/tools/cuda-9.0 # change to your path
+export CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME
+export LD_LIBRARY_PATH="$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
+export LIBRARY_PATH=$CUDA_HOME/lib64:$LIBRARY_PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+export CFLAGS="-I$CUDA_HOME/include $CFLAGS"
+'''
 
 ## Documentation
 
@@ -66,6 +78,28 @@ Some of these flags do not currently exist for the 3D algorithm.
 
 Amazon/Protein datasets must exist as COO files in `../data/<graphname>/processed/`, compressed with pickle. 
 For Reddit, PyG handles downloading and accessing the dataset (see below).
+
+## Running with torch.distributed.launch on CHPC (example)
+
+Run the following command to download the Reddit dataset:
+
+`python gcn_distr_15d.py --graphname=Reddit --download=True`
+
+This will download Reddit into `../data`. After downloading the Reddit dataset, run the following command to run training
+
+To run with torch.distributed.launch, MASTER_PORT, MASTER_ADDR, WORLD_SIZE, RANK are required. The training script is setting them and this may cause some issues. I disabled the lines setting these environment variables and only passed them through the command below in an interactive job:
+
+`python -m torch.distributed.launch --nproc_per_node=1 --nnodes=2 --node_rank=1 --master_addr=10.242.66.106 --master_port=61234 gcn_distr_15d.py --accperrank=1 --epochs=100 --graphname=Reddit --timing=True --midlayer=128 --runcount=1 --replication=2`
+
+In a non-interactive job, the required environment variables can be obtained by 
+`master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+master_port=12345
+rank=$SLURM_PROCID
+world_size=$SLURM_NTASKS`
+
+Then they can be passed through a python command:
+
+`python -m torch.distributed.launch --nproc_per_node=1 --nnodes=$world_size --node_rank=$rank --master_addr=$master_addr --master_port=$master_port gcn_distr_15d.py --accperrank=1 --epochs=100 --graphname=Reddit --timing=True --midlayer=128 --runcount=1 --replication=2`
 
 ## Running on OLCF Summit (example)
 
