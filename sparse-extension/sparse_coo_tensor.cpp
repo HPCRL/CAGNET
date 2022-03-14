@@ -155,7 +155,7 @@ void spmm_gpu(const at::Tensor& A_rowindices,
     cusparseSpMatDescr_t matA;
     CHECK_CUSPARSE(cusparseCreateCsr(&matA,
 					  n, 		// rows
-					  b_col, 	// cols
+					  b_row, 	// cols
 					  nnz, 		// nnz
 					  d_a_csrrows, 	// csrRowOffsets
 					  A_colindices.data<int>(), // csrColInd
@@ -167,9 +167,9 @@ void spmm_gpu(const at::Tensor& A_rowindices,
 
     cusparseDnMatDescr_t matB;
     CHECK_CUSPARSE(cusparseCreateDnMat(&matB, 
-                                            B.size(1), // rows
-                                            b_col, // cols
-                                            B.size(1), // ld
+                                            b_col, // rows
+                                            b_row, // cols
+                                            b_col, // ld
                                             B.data<float>(), // values
                                             CUDA_R_32F,      // valueType
                                             CUSPARSE_ORDER_COL)); // order
@@ -181,9 +181,9 @@ void spmm_gpu(const at::Tensor& A_rowindices,
 
     cusparseDnMatDescr_t matC;
     CHECK_CUSPARSE(cusparseCreateDnMat(&matC, 
-                                            n, // rows
-                                            B.size(1), // cols
-                                            n, // ld
+                                            c_row, // rows
+                                            c_col, // cols
+                                            c_row, // ld
                                             C.data<float>(), // values
                                             CUDA_R_32F,      // valueType
                                             CUSPARSE_ORDER_COL)); // order
