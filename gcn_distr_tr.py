@@ -213,12 +213,13 @@ def transpose_input(node_count,inputs,rank,size,dim):
         # Horizontal to Vertical
         input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
         #if len(col_count) == 0:  for i in input_2d:    col_count += [input_2d[rank].size(1)]
-        recv = []
+        recv = [0]*size
         for i in range(size):
             col_count[i] = input_2d[i].size(1)
-        for i in range(size):
+        for ii in range(size):
+            i = ii^rank
             if i == rank:
-                recv += [input_2d[rank]]
+                recv[i] = input_2d[rank]
                 continue
             '''
             print('inside h2v transpose')
@@ -236,7 +237,8 @@ def transpose_input(node_count,inputs,rank,size,dim):
             else:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
-            recv += [input_recv]
+            
+            recv[i] = input_recv
         inputs = torch.cat(recv,0)
         #print('size after transpose')
         #print(inputs.size())
@@ -244,10 +246,11 @@ def transpose_input(node_count,inputs,rank,size,dim):
     elif dim == 1:
         # Vertical to Horizontal
         input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
-        recv = []
-        for i in range(size):
+        recv = [0]*size
+        for ii in range(size):
+            i = ii ^ rank
             if i == rank:
-                recv += [input_2d[rank]]
+                recv[i] = input_2d[rank]
                 continue
             '''
             print('inside v2h transpose')
@@ -265,7 +268,7 @@ def transpose_input(node_count,inputs,rank,size,dim):
             else:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
-            recv += [input_recv]
+            recv[i] = input_recv
         #for t in recv:            print('concat tensors '+str(t.size()))
         inputs = torch.cat(recv,1)
         #print('size after transpose')
