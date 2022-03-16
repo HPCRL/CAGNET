@@ -219,14 +219,16 @@ def transpose_input(node_count,inputs,rank,size,dim):
             if i == rank:
                 recv += [input_2d[rank]]
                 continue
+            '''
             print('inside h2v transpose')
             print(size)
             print(i)
             print(rank)
             print(inputs.size())
+            '''
             input_recv = torch.zeros(row_count[i], col_count[rank], device=device)
          
-            print('buffer size '+str(input_recv.size()))
+            #print('buffer size '+str(input_recv.size()))
             if rank == 0:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
@@ -235,8 +237,8 @@ def transpose_input(node_count,inputs,rank,size,dim):
                 dist.recv(tensor=input_recv, src=i)                            
             recv += [input_recv]
         inputs = torch.cat(recv,0)
-        print('size after transpose')
-        print(inputs.size())
+        #print('size after transpose')
+        #print(inputs.size())
         return inputs
     elif dim == 1:
         # Vertical to Horizontal
@@ -246,14 +248,16 @@ def transpose_input(node_count,inputs,rank,size,dim):
             if i == rank:
                 recv += [input_2d[rank]]
                 continue
+            '''
             print('inside v2h transpose')
             print(size)
             print(i)
             print(rank)
             print(inputs.size())
+            '''
             input_recv = torch.zeros(row_count[rank], col_count[i], device=device)
 
-            print('buffer size '+str(input_recv.size()))
+            #print('buffer size '+str(input_recv.size()))
             if rank == 0:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
@@ -264,8 +268,8 @@ def transpose_input(node_count,inputs,rank,size,dim):
         for t in recv:
             print('concat tensors '+str(t.size()))
         inputs = torch.cat(recv,1)
-        print('size after transpose')
-        print(inputs.size())
+        #print('size after transpose')
+        #print(inputs.size())
         return inputs
 
 def broad_func(node_count, am_partitions, inputs, rank, size, group):
@@ -306,15 +310,17 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
         tstart_comp = start_time(group, rank)
         
+        '''
         print(am_partitions[i].size(0))
         print(am_partitions[i].size(1))
         print(inputs_recv.size())
         print(z_loc.size())
+        '''
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                         am_partitions[i].values(), am_partitions[i].size(0), 
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
-        print('first SpMM was OK!')
+        #print('first SpMM was OK!')
         #exit()
         dur = stop_time(group, rank, tstart_comp)
         comp_time[run][rank] += dur
