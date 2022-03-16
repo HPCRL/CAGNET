@@ -201,6 +201,7 @@ def outer_product2(inputs, ag, rank, size, group):
     return grad_weight
 
 def transpose_input(node_count,inputs,rank,size,dim):
+    #print('in transpose '+str(rank)+' at dim '+str(dim))
     global device
     global comm_time
     global comp_time
@@ -229,12 +230,12 @@ def transpose_input(node_count,inputs,rank,size,dim):
             input_recv = torch.zeros(row_count[i], col_count[rank], device=device)
          
             #print('buffer size '+str(input_recv.size()))
-            if rank == 0:
+            if i < rank :
+                dist.send(tensor=input_2d[i].contiguous(), dst=i)
+                dist.recv(tensor=input_recv, src=i)
+            else:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
-            else:
-                dist.send(tensor=input_2d[i].contiguous(), dst=i)
-                dist.recv(tensor=input_recv, src=i)                            
             recv += [input_recv]
         inputs = torch.cat(recv,0)
         #print('size after transpose')
@@ -258,15 +259,14 @@ def transpose_input(node_count,inputs,rank,size,dim):
             input_recv = torch.zeros(row_count[rank], col_count[i], device=device)
 
             #print('buffer size '+str(input_recv.size()))
-            if rank == 0:
-                dist.recv(tensor=input_recv, src=i)
+            if i < rank :
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
+                dist.recv(tensor=input_recv, src=i)
             else:
-                dist.send(tensor=input_2d[i].contiguous(), dst=i)
                 dist.recv(tensor=input_recv, src=i)
+                dist.send(tensor=input_2d[i].contiguous(), dst=i)
             recv += [input_recv]
-        for t in recv:
-            print('concat tensors '+str(t.size()))
+        #for t in recv:            print('concat tensors '+str(t.size()))
         inputs = torch.cat(recv,1)
         #print('size after transpose')
         #print(inputs.size())
@@ -307,6 +307,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
         comm_time[run][rank] += dur
         bcast_comm_time[run][rank] += dur
 
+        #print('SpMM started at rank '+str(rank))
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
         tstart_comp = start_time(group, rank)
         
@@ -326,6 +327,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
 
+        #print('SpMM finished in rank '+str(rank))
         tstart_comm = start_time(group, rank)
         z_loc = transpose_input(node_count,z_loc,rank,size,1)
         dur = stop_time(group, rank, tstart_comm)
