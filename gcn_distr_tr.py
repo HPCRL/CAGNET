@@ -210,20 +210,21 @@ def transpose_input(node_count,inputs,rank,size,dim):
 
     if dim == 0:
         # Horizontal to Vertical
-        for i in range(size):
-            print(inputs.size())
-        input_2d = torch.split(inputs, math.ceil(float(inputs.size(1)) / size), dim=1)
+        input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
+        #if len(col_count) == 0:  for i in input_2d:    col_count += [input_2d[rank].size(1)]
         recv = []
+        for i in range(size):
+            col_count[i] = input_2d[i].size(1)
         for i in range(size):
             if i == rank:
                 recv += [input_2d[rank]]
                 continue
-            print('inside transpose')
+            print('inside h2v transpose')
             print(size)
             print(i)
             print(rank)
             print(inputs.size())
-            input_recv = torch.zeros(node_count - inputs.size(0), input_2d[rank].size(1),device=device)
+            input_recv = torch.zeros(row_count[i], col_count[rank], device=device)
          
             print('buffer size '+str(input_recv.size()))
             if rank == 0:
@@ -239,8 +240,33 @@ def transpose_input(node_count,inputs,rank,size,dim):
         return inputs
     elif dim == 1:
         # Vertical to Horizontal
-        return
-    return
+        input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
+        recv = []
+        for i in range(size):
+            if i == rank:
+                recv += [input_2d[rank]]
+                continue
+            print('inside v2h transpose')
+            print(size)
+            print(i)
+            print(rank)
+            print(inputs.size())
+            input_recv = torch.zeros(row_count[rank], col_count[i], device=device)
+
+            print('buffer size '+str(input_recv.size()))
+            if rank == 0:
+                dist.recv(tensor=input_recv, src=i)
+                dist.send(tensor=input_2d[i].contiguous(), dst=i)
+            else:
+                dist.send(tensor=input_2d[i].contiguous(), dst=i)
+                dist.recv(tensor=input_recv, src=i)
+            recv += [input_recv]
+        for t in recv:
+            print('concat tensors '+str(t.size()))
+        inputs = torch.cat(recv,1)
+        print('size after transpose')
+        print(inputs.size())
+        return inputs
 
 def broad_func(node_count, am_partitions, inputs, rank, size, group):
     global device
@@ -289,13 +315,13 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
         print('first SpMM was OK!')
-        exit()
+        #exit()
         dur = stop_time(group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
 
         tstart_comm = start_time(group, rank)
-        #inputs = transpose_input(inputs,rank,size,1)
+        z_loc = transpose_input(node_count,z_loc,rank,size,1)
         dur = stop_time(group, rank, tstart_comm)
         comm_time[run][rank] += dur
         bcast_comm_time[run][rank] += dur
@@ -523,6 +549,8 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
     return adj_part
 
 def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
+    global row_count
+    global col_count
     node_count = inputs.size(0)
     n_per_proc = math.ceil(float(node_count) / 1)
 
@@ -574,6 +602,15 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
         adj_matrix_loc = am_partitions[rankf]
         inputs_loc = input_partitions[rank]
 
+    row_count = []
+    col_count = []    
+    for inp in input_partitions:
+        row_count += [inp.size(0)]
+
+    input_col_partition = torch.split(inputs, math.ceil(float(inputs.size(1)) / size), dim=1)
+    for inp in input_col_partition:
+        col_count += [inp.size(1)] 
+    
     print(input_partitions[0].size())
     print(f"rank: {rankf} adj_matrix_loc.size: {adj_matrix_loc.size()}", flush=True)
     print(f"rank: {rankf} inputs.size: {inputs.size()}", flush=True)
