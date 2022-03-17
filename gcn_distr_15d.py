@@ -9,6 +9,7 @@ import torch.distributed as dist
 
 from torch_geometric.data import Data, Dataset
 from torch_geometric.datasets import Planetoid, PPI
+from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
 from reddit import Reddit
 from torch_geometric.nn import GCNConv, ChebConv  # noqa
 from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
