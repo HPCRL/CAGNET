@@ -9,6 +9,7 @@ import torch.distributed as dist
 
 from torch_geometric.data import Data, Dataset
 from torch_geometric.datasets import Planetoid, PPI
+from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
 from reddit import Reddit
 from torch_geometric.nn import GCNConv, ChebConv  # noqa
 from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
@@ -312,6 +313,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
 
         #print('SpMM started at rank '+str(rank))
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
+        print('size of output '+ str(z_loc.size()))
         tstart_comp = start_time(group, rank)
         
         '''
@@ -327,6 +329,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group):
         #print('first SpMM was OK!')
         #exit()
         dur = stop_time(group, rank, tstart_comp)
+        print('SpMM time '+str(dur))
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
 
@@ -421,11 +424,14 @@ class GCNFunc(torch.autograd.Function):
         tstart_comp = start_time(group, rank)
 
         grad_input = torch.mm(ag, weight.t())
+        #grad_input_2 = torch.mm(grad_output, weight.t())
 
         dur = stop_time(group, rank, tstart_comp)
         comp_time[run][rank] += dur
         dcomp_time[run][rank] += dur
 
+
+        #grad_input = broad_func(adj_matrix.size(0), am_partitions, grad_input_2, rank, size, group)
         # Second backprop equation (reuses the A * G^l computation)
         grad_weight = outer_product2(inputs.t(), ag, rank, size, group)
 
@@ -439,6 +445,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
     datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
 
+    print('backward')
     # Note: bool type removes warnings, unsure of perf penalty
     # loss = F.nll_loss(outputs[data.train_mask.bool()], data.y[data.train_mask.bool()])
     if list(datay_rank[rank_train_mask].size())[0] > 0:
@@ -891,6 +898,48 @@ def main():
         data = data.to(device)
         inputs.requires_grad = True
         data.y = data.y.to(device)
+    elif 'ogb' in graphname:
+        path = '/scratch/general/nfs1/u1320844/dataset'
+        path = '../data/'
+        dataset = PygNodePropPredDataset(graphname, path,transform=T.NormalizeFeatures())
+        #evaluator = Evaluator(name=graphname)
+        if 'mag' in graphname:
+            rel_data = dataset[0]
+            # only train with paper <-> paper relations.
+            data = Data(
+                x=rel_data.x_dict['paper'],
+                edge_index=rel_data.edge_index_dict[('paper', 'cites', 'paper')],
+                y=rel_data.y_dict['paper'])
+            data = T.NormalizeFeatures()(data)
+            split_idx = dataset.get_idx_split()
+            train_idx = split_idx['train']['paper']
+            val_idx = split_idx['valid']['paper']
+            test_idx = split_idx['test']['paper']
+        else:
+            split_idx = dataset.get_idx_split()
+            data = dataset[0]
+            data = data.to(device)
+            train_idx = split_idx['train']
+            val_idx = split_idx['valid']
+            test_idx = split_idx['test']
+
+        data.x.requires_grad = True
+        inputs = data.x.to(device)
+        #inputs.requires_grad = True
+        data.y = data.y.squeeze().to(device)
+        edge_index = data.edge_index
+        num_features = dataset.num_features if not 'mag' in graphname else 128
+        num_classes = dataset.num_classes
+        num_nodes = len(data.x)
+        train_mask = torch.zeros(num_nodes)
+        train_mask[train_idx] = 1
+        val_mask = torch.zeros(num_nodes)
+        val_mask[val_idx] = 1
+        test_mask = torch.zeros(num_nodes)
+        test_mask[test_idx] = 1
+        data.train_mask = train_mask
+        data.val_mask = val_mask
+        data.test_mask = test_mask
 
     if download:
         exit()
