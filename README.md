@@ -79,6 +79,17 @@ Some of these flags do not currently exist for the 3D algorithm.
 Amazon/Protein datasets must exist as COO files in `../data/<graphname>/processed/`, compressed with pickle. 
 For Reddit, PyG handles downloading and accessing the dataset (see below).
 
+## Running with slurm on RI2 
+
+Run the following command to download the ogbn-products dataset:
+`python gcn_distr_15d.py --graphname='ogbn-products' --download=True`
+
+This will download ogbn-products into `../data`. After downloading the ogbn-products dataset, run the following command to run 1.5D and transoposing benchmarks
+
+`bash run_slurm.sh`
+
+This script outamatically runs benchmarks for 1.5D and transpose. However it is set for 1 GPU per node, which might not be the case in other systems. Also this script tests for Reddit, ogbn-products, ogbn-mag and ogbn-arxiv. If some of these are not downloaded before it will cause runtime errors. Accelerator per gpu parameters can be changed in slurm_tr.sh and slurm_15d.sh scripts for other systems.
+
 ## Running with torch.distributed.launch on CHPC (example)
 
 Run the following command to download the Reddit dataset:
