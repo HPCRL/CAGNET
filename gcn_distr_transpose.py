@@ -252,6 +252,8 @@ def transpose_input(node_count,inputs,rank,size,dim):
     elif dim == 1:
         # Vertical to Horizontal
         #horizontal_tiled = True
+        print('Transpose '+str(inputs.size()))
+        print(row_count)
         input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
         recv = [0]*size
         for ii in range(size):
@@ -267,7 +269,6 @@ def transpose_input(node_count,inputs,rank,size,dim):
             print(inputs.size())
             '''
             input_recv = torch.zeros(row_count[rank], col_count[i], device=device)
-
             #print('buffer size '+str(input_recv.size()))
             if i < rank :
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
@@ -309,7 +310,6 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
 #        elif i == size - 1:            inputs_recv = torch.cuda.FloatTensor(am_partitions[i].size(1), inputs.size(1), device=device).fill_(0)
             # inputs_recv = torch.zeros(list(am_partitions[i].t().size())[1], inputs.size(1))
         transpose = True
-        inputs_recv = inputs 
         if horizontal_tiled:
             tstart_comm = start_time(group, rank)        
             inputs_recv = transpose_input(node_count,inputs,rank,size,0)       
@@ -317,6 +317,10 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
             comm_time[run][rank] += dur
             bcast_comm_time[run][rank] += dur
             transpose = False
+        else:
+            #Hacked a solution here but we need a better way to do this 
+            inputs_recv = torch.cat(torch.split(inputs, inputs.size(1), dim=1),0)
+            #print(inputs_recv)
 
         #print('SpMM started at rank '+str(rank))
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
@@ -329,11 +333,14 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
         print(inputs_recv.size())
         print(z_loc.size())
         '''
+        #inputs_recv = torch.cuda.FloatTensor(n_per_proc, inputs.size(1), device=device).fill_(1)
+        #print(am_partitions)
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                         am_partitions[i].values(), am_partitions[i].size(0), 
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
         #print('first SpMM was OK!')
+        #print(z_loc)
         #exit()
         dur = stop_time(group, rank, tstart_comp)
         print('SpMM time '+str(dur))
@@ -356,7 +363,7 @@ class GCNFunc(torch.autograd.Function):
         global comp_time
         global dcomp_time
         global run
-        global x1
+        #lobal x1
         global ht
         # inputs: H
         # adj_matrix: A
@@ -371,7 +378,7 @@ class GCNFunc(torch.autograd.Function):
         ctx.group = group
 
         ctx.func = func
-        x1 = 0 
+        #1 = 0 
         z = 0
         if ht:
             print('forw horizontal '+str(rank))
@@ -383,6 +390,7 @@ class GCNFunc(torch.autograd.Function):
             z = broad_func(adj_matrix.size(0), am_partitions, z, rank, size, group, ht)
 
         else:
+            global x1
             print('forw vertical '+str(rank))
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
             x1 = broad_func(adj_matrix.size(0), am_partitions, inputs, rank, size, group, ht)
@@ -417,6 +425,7 @@ class GCNFunc(torch.autograd.Function):
         global ht
         global x1
 
+        if ctx.rank == 0: print('grad back '+str(grad_output))
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
@@ -470,7 +479,8 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     ht = horizontal_tiled
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, F.log_softmax)
-    
+   
+    print(outputs) 
     optimizer.zero_grad()
     rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
     datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
@@ -655,7 +665,8 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
 
     row_count = []
     col_count = []    
-    for inp in input_partitions:
+    input_row_partition = torch.split(inputs, math.ceil(float(inputs.size(0)) / size), dim=0)
+    for inp in input_row_partition:
         row_count += [inp.size(0)]
 
     input_col_partition = torch.split(inputs, math.ceil(float(inputs.size(1)) / size), dim=1)
