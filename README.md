@@ -30,6 +30,10 @@ pip install --no-cache-dir torch-scatter==1.4.0
 pip install --no-cache-dir torch-sparse==0.4.3
 pip install --no-cache-dir torch-cluster==1.4.5
 pip install --no-cache-dir torch-geometric==1.3.2
+
+# OGB dataset integration
+pip install ogb
+
 ```
 It's sometimes tricky to install pytorch-geometric... Even after installing them, there could be some error importing GCNConv. As this GCNConv isn't used, I think this line can be deleted.
 
