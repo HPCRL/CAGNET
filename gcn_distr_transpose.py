@@ -12,7 +12,7 @@ from torch_geometric.datasets import Planetoid, PPI
 from ogb.nodeproppred import PygNodePropPredDataset, Evaluator
 from reddit import Reddit
 from torch_geometric.nn import GCNConv, ChebConv  # noqa
-from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
+from torch_geometric.utils import remove_self_loops, add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
 import torch_geometric.transforms as T
 
 import torch.multiprocessing as mp
@@ -252,8 +252,8 @@ def transpose_input(node_count,inputs,rank,size,dim):
     elif dim == 1:
         # Vertical to Horizontal
         #horizontal_tiled = True
-        print('Transpose '+str(inputs.size()))
-        print(row_count)
+        # print('Transpose '+str(inputs.size()))
+        # print(row_count)
         input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / size), dim=1-dim)
         recv = [0]*size
         for ii in range(size):
@@ -319,12 +319,13 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
             transpose = False
         else:
             #Hacked a solution here but we need a better way to do this 
-            inputs_recv = torch.cat(torch.split(inputs, inputs.size(1), dim=1),0)
+            #inputs_recv = torch.cat(torch.split(inputs, inputs.size(1), dim=1),0)
+            inputs_recv = inputs.detach().contiguous()
             #print(inputs_recv)
 
         #print('SpMM started at rank '+str(rank))
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
-        print('size of output '+ str(z_loc.size()))
+        # print('size of output '+ str(z_loc.size()))
         tstart_comp = start_time(group, rank)
         
         '''
@@ -343,7 +344,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
         #print(z_loc)
         #exit()
         dur = stop_time(group, rank, tstart_comp)
-        print('SpMM time '+str(dur))
+        # print('SpMM time '+str(dur))
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
 
@@ -376,12 +377,12 @@ class GCNFunc(torch.autograd.Function):
         ctx.rank = rank
         ctx.size = size
         ctx.group = group
-
+        ctx.abcd = 1
         ctx.func = func
         #1 = 0 
         z = 0
         if ht:
-            print('forw horizontal '+str(rank))
+            if rank == 0: print('forw horizontal '+str(rank))
             tstart_comp = start_time(group, rank)
             z = torch.mm(inputs, weight)
             dur = stop_time(group, rank, tstart_comp)
@@ -391,7 +392,7 @@ class GCNFunc(torch.autograd.Function):
 
         else:
             global x1
-            print('forw vertical '+str(rank))
+            if rank == 0: print('forw vertical '+str(rank))
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
             x1 = broad_func(adj_matrix.size(0), am_partitions, inputs, rank, size, group, ht)
             tstart_comp = start_time(group, rank)
@@ -425,7 +426,7 @@ class GCNFunc(torch.autograd.Function):
         global ht
         global x1
 
-        if ctx.rank == 0: print('grad back '+str(grad_output))
+        #if ctx.rank == 0: print('grad back '+str(grad_output))
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
@@ -447,10 +448,11 @@ class GCNFunc(torch.autograd.Function):
                 sigmap = torch.autograd.grad(outputs=func_eval, inputs=z, grad_outputs=grad_output)[0]
                 grad_output = sigmap
 
+        #print('grad output '+str(grad_output[0]) + ' rank ' + str(rank))
         grad_input=None
         grad_weight=None
         if ht:
-            print('hor back '+str(rank))
+            if rank == 0: print('hor back '+str(rank))
             tstart_comp = start_time(group, rank)
             x2 = torch.mm(grad_output, weight.t())
             dur = stop_time(group, rank, tstart_comp)
@@ -461,7 +463,7 @@ class GCNFunc(torch.autograd.Function):
             grad_weight = outer_product2(x1.t(), grad_output, rank, size, group)
 
         else:
-            print('ver back '+str(rank))
+            if rank == 0: print('ver back '+str(rank))
             ag = broad_func(adj_matrix.size(0), am_partitions, grad_output, rank, size, group, ht)
             tstart_comp = start_time(group, rank)
             grad_input = torch.mm(ag, weight.t())
@@ -471,7 +473,8 @@ class GCNFunc(torch.autograd.Function):
             # Second backprop equation (reuses the A * G^l computation)
             grad_weight = outer_product2(inputs.t(), ag, rank, size, group)
 
-        #ht = not ht
+        # print('grad input '+str(grad_input[0]) + ' rank ' + str(rank))
+        # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
         return grad_input, grad_weight, None, None, None, None, None, None
 
 def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, rank, size, group, horizontal_tiled):
@@ -480,16 +483,16 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, F.log_softmax)
    
-    print(outputs) 
+    #print(outputs) 
     optimizer.zero_grad()
     rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
     datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
 
-    print('backward')
+    #print('backward')
     # Note: bool type removes warnings, unsure of perf penalty
     # loss = F.nll_loss(outputs[data.train_mask.bool()], data.y[data.train_mask.bool()])
     if list(datay_rank[rank_train_mask].size())[0] > 0:
-        print('normal loss')
+        # print('normal loss')
     # if datay_rank.size(0) > 0:
         loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
         # loss = F.nll_loss(outputs, torch.max(datay_rank, 1)[1])
@@ -608,6 +611,27 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
 
     return adj_part
 
+def symmetric(adj_matrix):
+    # print(adj_matrix)
+    # not sure whether the following is needed
+    adj_matrix = adj_matrix.to(torch.device("cpu"))
+
+    adj_matrix, _ = remove_self_loops(adj_matrix)
+
+    # Make adj_matrix symmetrical
+    idx = torch.LongTensor([1,0])
+    adj_matrix_transpose = adj_matrix.index_select(0,idx)
+    # print(adj_matrix_transpose)
+
+    adj_matrix = torch.cat([adj_matrix,adj_matrix_transpose],1)
+   
+    adj_matrix, _ = add_remaining_self_loops(adj_matrix) 
+   
+    adj_matrix.to(device)
+    return adj_matrix
+    
+
+
 def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
     global row_count
     global col_count
@@ -619,6 +643,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
 
     inputs = inputs.to(torch.device("cpu"))
     adj_matrix = adj_matrix.to(torch.device("cpu"))
+
 
     # Compute the adj_matrix and inputs partitions for this process
     # TODO: Maybe I do want grad here. Unsure.
@@ -694,6 +719,8 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     # adj_matrix_loc = torch.rand(node_count, n_per_proc)
     # inputs_loc = torch.rand(n_per_proc, inputs.size(1))
 
+    # adj_matrix = symmetric(adj_matrix)
+   
     inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data, 
                                                                 features, classes, device)
 
@@ -972,6 +999,7 @@ def main():
         #inputs.requires_grad = True
         data.y = data.y.squeeze().to(device)
         edge_index = data.edge_index
+        edge_index = symmetric(edge_index)
         num_features = dataset.num_features if not 'mag' in graphname else 128
         num_classes = dataset.num_classes
         num_nodes = len(data.x)

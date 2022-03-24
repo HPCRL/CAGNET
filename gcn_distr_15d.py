@@ -495,6 +495,23 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
 
     return adj_part
 
+def symmetric(adj_matrix):
+    print(adj_matrix)
+    # not sure whether the following is needed
+    adj_matrix = adj_matrix.to(torch.device("cpu"))
+    adj_matrix, _ = remove_self_loops(adj_matrix)
+    # Make adj_matrix symmetrical
+    idx = torch.LongTensor([1,0])
+    adj_matrix_transpose = adj_matrix.index_select(0,idx)
+    print(adj_matrix_transpose)
+
+    adj_matrix = torch.cat([adj_matrix,adj_matrix_transpose],1)
+    adj_matrix, _ = add_remaining_self_loops(adj_matrix)
+    adj_matrix.to(device)
+    return adj_matrix
+
+
+
 def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
     node_count = inputs.size(0)
     # n_per_proc = math.ceil(float(node_count) / size)
@@ -816,6 +833,7 @@ def main():
         data.y = data.y.to(device)
     elif 'ogb' in graphname:
         path = '/scratch/general/nfs1/u1320844/dataset'
+        path = '../data/'
         dataset = PygNodePropPredDataset(graphname, path,transform=T.NormalizeFeatures())
         #evaluator = Evaluator(name=graphname)
         if 'mag' in graphname:
@@ -843,6 +861,7 @@ def main():
         #inputs.requires_grad = True
         data.y = data.y.squeeze().to(device)
         edge_index = data.edge_index
+        edge_index = symmetric(edge_index)
         num_features = dataset.num_features if not 'mag' in graphname else 128
         num_classes = dataset.num_classes
         num_nodes = len(data.x)
