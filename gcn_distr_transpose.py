@@ -485,8 +485,10 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
    
     #print(outputs) 
     optimizer.zero_grad()
-    rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
-    datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
+    #rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
+    #datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
+    rank_train_mask = torch.split(data.train_mask.bool(), row_count, dim=0)[rank]
+    datay_rank = torch.split(data.y, row_count, dim=0)[rank]
 
     #print('backward')
     # Note: bool type removes warnings, unsure of perf penalty

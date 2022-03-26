@@ -563,8 +563,8 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     rank_train_mask = data.train_mask.bool()
     datay_rank = data.y
     if ht:
-        rank_train_mask = torch.split(data.train_mask.bool(), row_count[0], dim=0)[rank]
-        datay_rank = torch.split(data.y, row_count[0], dim=0)[rank]
+        rank_train_mask = torch.split(data.train_mask.bool(), row_count, dim=0)[rank]
+        datay_rank = torch.split(data.y, row_count, dim=0)[rank]
     else:
         tstart_comm = start_time(group, rank)
         #print('dim '+str(0 if inputs.size(1) < grad_input.size(1) else 1))
