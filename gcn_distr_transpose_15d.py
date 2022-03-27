@@ -214,42 +214,51 @@ def transpose_input(inputs,rank,size,row_group,dim):
     global ht
     global replication
     
-    # if dim = 0 create vertical tiling otherwise horizontal tiling        
-    col_count = size//replication
+    # if dim = 0 vertical tiling, dim = 1 horizontal tiling        
+    col_count = size//replication    
     rep_id = rank//col_count
     ht = (dim == 1)    
     # size//replication must be a power of 2
-    rank_mask = rank & ( col_count - 1 )    
+    rank_mask =  col_count - 1 
     input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / col_count), dim=1-dim)    
-    recv = [0]*col_count
+    recv = [None]*col_count
     if dim == 0:
         for i in range(col_count):
             dim_count[rep_id][1][i] = input_2d[i].size(1)
     
+    #print('\ndim is '+str(dim))
     tstart_comm = start_time(row_group, rank)     
-    for ii in range(col_count):
-        i = ii^rank
-        if i == rank:
-            recv[i] = input_2d[rank]
+    for i in range(col_count):
+        p_i = i^rank        
+        il = p_i & rank_mask
+        #print(str(il)+' il '+str(rank)+' rank '+str(p_i)+' p_i and i'+str(i))
+        if p_i == rank:
+            #print('self copy at rank '+str(rank))
+            recv[il] = input_2d[il]
             continue
         
-        recv_row = i if dim == 0 else rank
-        recv_col = i if dim == 1 else rank
+        recv_row = (p_i if dim == 0 else rank) & rank_mask
+        recv_col = (p_i if dim == 1 else rank) & rank_mask
+        #print(recv_row)
+        #print(recv_col)
+        #print(str(dim_count)+' ' +str(rank)+' '+str(p_i) + ' ' +str(recv_row))
+        #print(str(rank)+ " " +str([dim_count[rep_id][0][recv_row],dim_count[rep_id][1][recv_col]]))
         input_recv = torch.zeros(dim_count[rep_id][0][recv_row], dim_count[rep_id][1][recv_col], device=device)   
         #print(input_recv.size())
-        if i < rank :
-            dist.send(tensor=input_2d[i].contiguous(), dst=i)
-            dist.recv(tensor=input_recv, src=i)
+        if p_i < rank :
+            dist.send(tensor=input_2d[il].contiguous(), dst=p_i)
+            dist.recv(tensor=input_recv, src=p_i)
         else:
-            dist.recv(tensor=input_recv, src=i)
-            dist.send(tensor=input_2d[i].contiguous(), dst=i)
+            dist.recv(tensor=input_recv, src=p_i)
+            dist.send(tensor=input_2d[il].contiguous(), dst=p_i)
             
         #print(input_recv.size())
         
-        recv[i] = input_recv
+        recv[il] = input_recv
     #print('ht '+str(ht))
     #print('dim '+str(dim))
     #print('row_group '+str(row_group))
+    
     inputs = torch.cat(recv,dim)    
     dur = stop_time(row_group, rank, tstart_comm)
     comm_time[run][rank] += dur
@@ -265,15 +274,19 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
     global bcast_comm_time
     global run
     global replication    
-
+    
+    #print('spmm at rank '+str(rank))
     col_count = size//replication
     rep_id = rank//col_count
     inputs_ = inputs.detach().contiguous() #torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
     if horizontal_tiled:
-        inputs_ = transpose_input(inputs,rank,size,row_group,0)            
+        inputs_ = transpose_input(inputs,rank,size,row_group,0)   
+        dist.barrier(row_group)
+    else:
+        dist.barrier(col_group)
     #print(am_partitions[0].size())
     #print(inputs_.size())
-    z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_.size(1), device=device).fill_(0)
+    z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
     rank_col = rank % col_count
     
     for i in range(replication):  
@@ -285,24 +298,26 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         if tile_id == rank:
             inputs_recv = inputs_
         else:
-            inputs_recv = torch.cuda.FloatTensor(dim_count[i][0][0], inputs.size(1), device=device).fill_(0)
-        
+            row_recv = sum(dim_count[i][0])            
+            inputs_recv = torch.cuda.FloatTensor(row_recv, inputs_.size(1), device=device).fill_(0)
+                                
         tstart_comm = start_time(col_group, rank)        
-        dist.broadcast(inputs_recv, src=tile_id, group=col_group)
+        dist.broadcast(inputs_recv, src=tile_id, group=col_group)        
         dur = stop_time(col_group, rank, tstart_comm)
         comm_time[run][rank] += dur
-        bcast_comm_time[run][rank] += dur
-        
-        tstart_comp = start_time(group, rank)
-            
+        bcast_comm_time[run][rank] += dur                
+        tstart_comp = start_time(col_group, rank)
+        #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
+        #print(am_partitions[i].size())
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                             am_partitions[i].values(), am_partitions[i].size(0), 
                             am_partitions[i].size(1), inputs_recv, z_loc)
 
-        dur = stop_time(group, rank, tstart_comp)
+        dur = stop_time(col_group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
-
+    
+    #dist.barrier(col_group)    
     return z_loc
 
 
@@ -314,6 +329,8 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     global bcast_comm_time
     global run
 
+    dist.barrier(row_group)
+    #print('gemm at rank '+str(rank))
     col_count = size//replication
     rep_id = rank//col_count    
     inputs_recv = inputs 
@@ -325,8 +342,24 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     dur = stop_time(group, rank, tstart_comp)
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
+    
+    dist.barrier(row_group)
 
     return z
+
+def dist_nll(outputs,labels,row_group,rank):
+    loss = 0
+    col_count = size // replication
+    col_id = rank % col_count       
+    l_start = sum[dim_count[0][1][:col_id]] # Sum the col_ids until current col
+    l_end = sum[dim_count[0][1][:col_id+1]] # Sum the col_ids including current col
+    for i in range(output.size(0)):
+        if labels[i]>=l_start and labels[i] < l_end:
+            loss -= outputs[labels[i]-l_start]
+    # reduce loss
+    dist.all_reduce(loss, op=dist.reduce_op.SUM, group=row_group)
+    loss /= output.size(0)
+    return loss
 
 def dist_log_softmax(z, rank, size, group):
     print('dist log softmax')
@@ -379,21 +412,22 @@ class GCNFunc(torch.autograd.Function):
         z = 0
         #if rank == 0: print(inputs.size(),end=', ')
         if order[0] == 'd':
-            if rank == 0: print('forw horizontal '+str(rank))
+            if rank == 0: print('forw horizontal '+str(rank),end=' -> ', flush=True)
             z = gemm_func(inputs, weight, rank, size, group, row_group, col_group, ht)
             z = spmm_func(am_partitions, z, rank, size, group, row_group, col_group, ht)
 
         else:
-            if rank == 0: print('forw vertical '+str(rank))
+            if rank == 0: print('forw vertical '+str(rank),end=' -> ', flush=True)
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
             y1 = spmm_func( am_partitions, inputs, rank, size, group, row_group, col_group, ht)
             
             # Convert y1 to x1
+            
             x1 = transpose_input(y1,rank,size,row_group,1)
             ctx.x1 = x1
             z = gemm_func(x1, weight, rank, size, group, row_group, col_group, ht)
 
-        z.requires_grad = True
+        z.requires_grad = True        
         ctx.z = z
         #ht = not ht
 
@@ -403,7 +437,7 @@ class GCNFunc(torch.autograd.Function):
                 if ht:
                     h = func(z, dim=1)
                 else:
-                    h = dist_log_softmax(z, rank, size, group)
+                    h = dist_log_softmax(z, rank, size, row_group)
             elif func is F.relu:
                 h = func(z)
             else:
@@ -422,7 +456,7 @@ class GCNFunc(torch.autograd.Function):
         global ht
         global x1
 
-        #f ctx.rank == 0: print('grad back '+str(grad_output.size()))
+        #if ctx.rank == 0: print('grad back '+str(grad_output.size()))
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
@@ -441,7 +475,7 @@ class GCNFunc(torch.autograd.Function):
                     if ht:
                         func_eval = func(z, dim=1)
                     else:
-                        func_eval = dist_log_softmax(z, rank, size, group)
+                        func_eval = dist_log_softmax(z, rank, size, row_group)
                 elif func is F.relu:
                     func_eval = func(z)
                 else:
@@ -458,7 +492,7 @@ class GCNFunc(torch.autograd.Function):
 
         #if rank == 0: print(grad_output.size(),end=', ')
         if order[1] == 'd':
-            if rank == 0: print('back horizontal '+str(rank))
+            if rank == 0: print('back horizontal '+str(rank),end=' -> ', flush=True)
             x2 = gemm_func(grad_output, weight.t(), rank, size, group, row_group, col_group, ht)
             grad_input = spmm_func(am_partitions, x2 , rank, size, group, row_group, col_group, ht)
             # Second backprop equation (reuses the A * H^(l-1) computation)
@@ -468,7 +502,7 @@ class GCNFunc(torch.autograd.Function):
             grad_weight = outer_product2(x1.t(), grad_output, rank, size, group)
 
         else:
-            if rank == 0: print('back vertical '+str(rank))
+            if rank == 0: print('back vertical '+str(rank),end=' -> ', flush=True)
             #print(grad_output.size())
             ag = spmm_func(am_partitions, grad_output, rank, size, group, row_group, col_group, ht)            
 
@@ -499,7 +533,7 @@ class GCNFunc(torch.autograd.Function):
         # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
         return grad_input, grad_weight, None, None, None, None, None, None, None, None, None
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, rank, size, group, row_groups, col_groups, horizontal_tiled):
+def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, mmorder, data, rank, size, group, row_groups, col_groups, horizontal_tiled):
     global ht
     global run
     
@@ -517,7 +551,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     
     v_size = []
     for c in range(replication):
-        v_size += dim_count[c][0]
+        v_size += dim_count[c][0]    
     if ht:
         rank_train_mask = torch.split(data.train_mask.bool(), v_size, dim=0)[rank]
         datay_rank = torch.split(data.y, v_size, dim=0)[rank]
@@ -542,8 +576,20 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
         #print(outputs[rank_train_mask].size())
         #print(datay_rank[rank_train_mask].size()) 
         #print(datay_rank[rank_train_mask])
-        loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
+        loss = 0        
+        '''
+        print(str(rank_train_mask.size())+ ' ' +str(rank))
+        print(str(datay_rank.size())+ ' ' +str(rank))
+        print(str(outputs.size())+ ' ' +str(rank))
+        print(dim_count)
+        '''
+        if ht:
+            loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
+        else:
+            row_id = rank // (size//replication)
+            loss = dist_nll(outputs[rank_train_mask], datay_rank[rank_train_mask],row_groups[row_id])
         # loss = F.nll_loss(outputs, torch.max(datay_rank, 1)[1])
+        
         loss.backward()
     else:
         print('fake loss')
@@ -749,13 +795,13 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
             am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[row_id], 
                                                 col_indices[i])
             
-        
+                
         proc_node_count = vtx_indices[row_id + 1] - vtx_indices[row_id]
         am_partitions[row_id] = torch.sparse_coo_tensor(am_partitions[row_id], 
                                                 torch.ones(am_partitions[row_id].size(1)), 
-                                                size=(node_count, proc_node_count), 
+                                                size=(proc_node_count, node_count), 
                                                 requires_grad=False)
-        am_partitions[row_id] = scale_elements(adj_matrix, am_partitions[row_id], node_count,  vtx_indices[i], 0)
+        am_partitions[row_id] = scale_elements(adj_matrix, am_partitions[row_id], node_count,  vtx_indices[row_id], 0)
         
         # First split inputs into multiple row panels
         inputs_row = torch.split(inputs, math.ceil(float(inputs.size(0)) / replication), dim=0)
@@ -790,6 +836,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     for a in am_pbyp:
         print(f"rank: {rank} adj_matrix_tile_loc.size: {a.size()}", flush=True)
     print(f"rank: {rank} inputs.size: {inputs.size()}", flush=True)
+    print(f"rank: {rank} inputs_tile.size: {inputs_loc.size()}", flush=True)
     return inputs_loc, am_partitions[row_id], am_pbyp, ht
 
 def run(rank, size, inputs, adj_matrix, data, features, classes, device):
@@ -816,10 +863,11 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data, 
                                                                 features, classes, device)
 
+    
     inputs_loc = inputs_loc.to(device)
     adj_matrix_loc = adj_matrix_loc.to(device)
     for i in range(len(am_pbyp)):
-        am_pbyp[i] = am_pbyp[i].t().coalesce().to(device)
+        am_pbyp[i] = am_pbyp[i].coalesce().to(device)
 
     for i in range(run_count):
         run = i
@@ -865,8 +913,19 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
         timing_on = timing == True
         timing = False
-        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data, 
+        
+        candidate_order = [mmorder]
+        order_time = []
+        
+        ep_start = time.time()
+        mmorder_c = candidate_order[0]
+        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, mmorder_c, data, 
                                 rank, size, group, row_groups, col_groups, ht)
+        ep_end = time.time()
+        ep_time = ep_end - ep_start
+        order_time += [ep_time]
+        best_mmorder = -1
+        
         if timing_on:
             timing = True
 
@@ -874,11 +933,28 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         tstart = time.time()
 
         # for epoch in range(1, 201):
-        print(f"Starting training... rank {rank} run {i}", flush=True)
-        for epoch in range(1, epochs):
-            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data, 
+        print(f"\nStarting training... rank {rank} run {i}", flush=True)
+        for epoch in range(1, epochs):            
+            if len(order_time) < len(candidate_order):
+                mmorder_c = candidate_order[len(order_time)]
+            elif best_mmorder == -1:
+                best_mmorder = 0
+                for i in range(1,len(candidate_order)):
+                    if order_time[i] < order_time[best_mmorder]:
+                        best_mmorder = i                
+                print('Best MM order is '+str(candidate_order[best_mmorder])+' at rank '+str(rank))
+            else:
+                mmorder_c = candidate_order[best_mmorder]
+                
+            ep_start = time.time()            
+            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, mmorder_c, data, 
                                     rank, size, group, row_groups, col_groups, ht)
-            print("Epoch: {:03d}".format(epoch), flush=True)
+            ep_end = time.time()
+            ep_time = ep_end - ep_start
+            if len(order_time) < len(candidate_order):
+                order_time += [ep_time]
+                
+            if rank == 0: print("\nEpoch: {:03d}".format(epoch), flush=True)
 
         # dist.barrier(group)
         tstop = time.time()
