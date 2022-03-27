@@ -405,19 +405,20 @@ class GCNFunc(torch.autograd.Function):
         ctx.row_group = row_group
         ctx.col_group = col_group
         ctx.x1 = None
-        
+        ctx.input_h = None
+        input_ht = ht 
         if order == "dd":
             print("ERROR: Suboptimal computation configuration. SpMM should be the first op in either forward or backward. Quitting...")
             exit()
         z = 0
         #if rank == 0: print(inputs.size(),end=', ')
         if order[0] == 'd':
-            if rank == 0: print('forw horizontal '+str(rank),end=' -> ', flush=True)
+            if rank == 0: print('forw horizontal '+str(rank),end=' -> ')
             z = gemm_func(inputs, weight, rank, size, group, row_group, col_group, ht)
             z = spmm_func(am_partitions, z, rank, size, group, row_group, col_group, ht)
 
         else:
-            if rank == 0: print('forw vertical '+str(rank),end=' -> ', flush=True)
+            if rank == 0: print('forw vertical '+str(rank),end=' -> ')
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
             y1 = spmm_func( am_partitions, inputs, rank, size, group, row_group, col_group, ht)
             
@@ -425,6 +426,12 @@ class GCNFunc(torch.autograd.Function):
             
             x1 = transpose_input(y1,rank,size,row_group,1)
             ctx.x1 = x1
+            if order[1] == 's':
+                if input_ht:
+                    ctx.input_h = inputs
+                else:
+                    input_h = transpose_input(inputs,rank,size,row_group,1)
+                    ctx.input_h = input_h
             z = gemm_func(x1, weight, rank, size, group, row_group, col_group, ht)
 
         z.requires_grad = True        
@@ -492,7 +499,7 @@ class GCNFunc(torch.autograd.Function):
 
         #if rank == 0: print(grad_output.size(),end=', ')
         if order[1] == 'd':
-            if rank == 0: print('back horizontal '+str(rank),end=' -> ', flush=True)
+            if rank == 0: print('back horizontal '+str(rank),end=' -> ')
             x2 = gemm_func(grad_output, weight.t(), rank, size, group, row_group, col_group, ht)
             grad_input = spmm_func(am_partitions, x2 , rank, size, group, row_group, col_group, ht)
             # Second backprop equation (reuses the A * H^(l-1) computation)
@@ -502,7 +509,7 @@ class GCNFunc(torch.autograd.Function):
             grad_weight = outer_product2(x1.t(), grad_output, rank, size, group)
 
         else:
-            if rank == 0: print('back vertical '+str(rank),end=' -> ', flush=True)
+            if rank == 0: print('back vertical '+str(rank),end=' -> ')
             #print(grad_output.size())
             ag = spmm_func(am_partitions, grad_output, rank, size, group, row_group, col_group, ht)            
 
@@ -516,14 +523,10 @@ class GCNFunc(torch.autograd.Function):
             #print(str(inputs.size(1))+" expected but got "+str(ag.size(1)))
             inputs_h = inputs
             if inputs.size(0) != ag.size(0):
-                #print('transpose')
-                tstart_comm = start_time(group, rank)
-                inputs_h = transpose_input(inputs,rank,size,row_group,1)
-                dur = stop_time(group, rank, tstart_comm)
-                comm_time[run][rank] += dur
-                bcast_comm_time[run][rank] += dur
-            ht = True
+                inputs_h = ctx.input_h
+            ht = True            
             grad_weight = outer_product2(inputs_h.t(), ag, rank, size, group)
+            print(grad_weight.size())
 
         if inputs.size(1) != grad_input.size(1) :
             dim = 0 if inputs.size(1) < grad_input.size(1) else 1
@@ -533,13 +536,13 @@ class GCNFunc(torch.autograd.Function):
         # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
         return grad_input, grad_weight, None, None, None, None, None, None, None, None, None
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, mmorder, data, rank, size, group, row_groups, col_groups, horizontal_tiled):
+def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order, data, rank, size, group, row_groups, col_groups, horizontal_tiled):
     global ht
     global run
     
-    order1 = mmorder[0] + mmorder[3]
+    order1 = order[0] + order[3]
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order1, F.relu)
-    order2 = mmorder[1] + mmorder[2]
+    order2 = order[1] + order[2]
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order2, F.log_softmax)
    
     # print(outputs) 
@@ -839,6 +842,87 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     print(f"rank: {rank} inputs_tile.size: {inputs_loc.size()}", flush=True)
     return inputs_loc, am_partitions[row_id], am_pbyp, ht
 
+def simulate_comm_comp(features,hidden,classes,layers,order):
+    comm = 0
+    comp = 0
+    #Simple code for 2 layers. Can be genralized later
+    #Find inter transpose costs    
+    for i in range(1,2*layers):
+        if order[i] == order[i-1]:
+            if i == layers:
+                comm += classes
+            else:
+                comm += hidden
+    
+    # Find for first and last layer intra transpose
+    if order[0] == 'd':
+        comm += hidden
+        comp += hidden
+    else:
+        comm += features
+        comp += features
+    
+    if order[1] == 's':
+        comm += hidden
+        comp += hidden
+    else:
+        comm += classes
+        comp += classes
+    
+    if order[3] == 's':
+        comm += hidden
+        comp += hidden
+    else:
+        comm += features
+        comp += features
+    
+    if order[2] == 'd':
+        comm += hidden
+        comp += hidden
+    else:
+        comm += classes
+        comp += classes
+    
+    # Find cases for extra comp and comm for W gradient
+    if order[0] == 'd' and order[3] == 'd':
+        comm += min(features,hidden)
+        comp += min(features,hidden)
+    
+    if order[1] == 'd' and order[2] == 'd':
+        comm += min(classes,hidden)
+        comp += min(classes,hidden)
+        
+    return [comm,comp]
+
+def find_candidates(features,hidden,classes,layers):
+    #naive P(4^layer) algorithm. Maybe improved later
+    candidates = []
+    all_cases = []
+    #populate all_cases
+    for i in range(4 ** layers):
+        c_str = "{0:b}".format(i)
+        while len(c_str) < 2*layers:
+            c_str = '0' + c_str
+        
+        c_str = c_str.replace('0','d').replace('1','s')
+        if c_str[layers-1] == 's': # Eliminate cases needing distributed loss
+            all_cases += [c_str]
+    
+    comm_comp = []    
+    for c in all_cases:
+        comm_comp += [simulate_comm_comp(features,hidden,classes,layers,c)+[c]]
+    
+    comm_comp.sort()
+    comm = 0
+    comp = comm_comp[0][1]    
+    candidates += [comm_comp[0][2]]
+    for c in comm_comp:
+        if c[1] < comp or (c[0] == comm and c[1] == comp):
+            comp = c[1]
+            comm = c[0]
+            candidates += [c[2]]           
+    return candidates
+
 def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     global epochs
     global mid_layer
@@ -915,6 +999,11 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         timing = False
         
         candidate_order = [mmorder]
+        #candidate_order = find_candidates(features,mid_layer,classes,2)
+        print(candidate_order)
+        #print(features)
+        #print(classes)
+        #print(mid_layer)
         order_time = []
         
         ep_start = time.time()
@@ -945,11 +1034,12 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
                 print('Best MM order is '+str(candidate_order[best_mmorder])+' at rank '+str(rank))
             else:
                 mmorder_c = candidate_order[best_mmorder]
-                
+                        
             ep_start = time.time()            
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, mmorder_c, data, 
                                     rank, size, group, row_groups, col_groups, ht)
             ep_end = time.time()
+            
             ep_time = ep_end - ep_start
             if len(order_time) < len(candidate_order):
                 order_time += [ep_time]
@@ -976,18 +1066,19 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         
     dist.broadcast(median_idx, src=0, group=group)        
     median_idx = median_idx.item()
-    print(f"rank: {rank} median_run: {median_idx}")
-    print(f"rank: {rank} total_time: {total_time[median_idx][rank]}")
-    print(f"rank: {rank} comm_time: {comm_time[median_idx][rank]}")
-    print(f"rank: {rank} comp_time: {comp_time[median_idx][rank]}")
-    print(f"rank: {rank} scomp_time: {scomp_time[median_idx][rank]}")
-    print(f"rank: {rank} dcomp_time: {dcomp_time[median_idx][rank]}")
-    print(f"rank: {rank} bcast_comm_time: {bcast_comm_time[median_idx][rank]}")
-    print(f"rank: {rank} barrier_time: {barrier_time[median_idx][rank]}")
-    print(f"rank: {rank} barrier_subset_time: {barrier_subset_time[median_idx][rank]}")
-    print(f"rank: {rank} op1_comm_time: {op1_comm_time[median_idx][rank]}")
-    print(f"rank: {rank} op2_comm_time: {op2_comm_time[median_idx][rank]}")
-    print(f"rank: {rank} {outputs}")
+    if rank == 0:
+        print(f"rank: {rank} median_run: {median_idx}")
+        print(f"rank: {rank} total_time: {total_time[median_idx][rank]}")
+        print(f"rank: {rank} comm_time: {comm_time[median_idx][rank]}")
+        print(f"rank: {rank} comp_time: {comp_time[median_idx][rank]}")
+        print(f"rank: {rank} scomp_time: {scomp_time[median_idx][rank]}")
+        print(f"rank: {rank} dcomp_time: {dcomp_time[median_idx][rank]}")
+        print(f"rank: {rank} bcast_comm_time: {bcast_comm_time[median_idx][rank]}")
+        print(f"rank: {rank} barrier_time: {barrier_time[median_idx][rank]}")
+        print(f"rank: {rank} barrier_subset_time: {barrier_subset_time[median_idx][rank]}")
+        print(f"rank: {rank} op1_comm_time: {op1_comm_time[median_idx][rank]}")
+        print(f"rank: {rank} op2_comm_time: {op2_comm_time[median_idx][rank]}")
+        print(f"rank: {rank} {outputs}")
     
     
     if accuracy:
