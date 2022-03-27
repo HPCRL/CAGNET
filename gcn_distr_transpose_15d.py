@@ -377,7 +377,7 @@ def dist_log_softmax(z, rank, size, group):
 
 class GCNFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inputs, weight, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order, func):
+    def forward(ctx, inputs, weight, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order, last_layer, func):
         global comm_time
         global comp_time
         global dcomp_time
@@ -404,6 +404,7 @@ class GCNFunc(torch.autograd.Function):
         col_group = col_groups[col_id]
         ctx.row_group = row_group
         ctx.col_group = col_group
+        ctx.last = last_layer
         ctx.x1 = None
         ctx.input_h = None
         input_ht = ht 
@@ -413,10 +414,18 @@ class GCNFunc(torch.autograd.Function):
         z = 0
         #if rank == 0: print(inputs.size(),end=', ')
         if order[0] == 'd':
+            if order[1] == 's':
+                if input_ht:
+                    ctx.input_h = inputs
+                else:
+                    input_h = transpose_input(inputs,rank,size,row_group,1)
+                    ctx.input_h = input_h
+                    inputs = input_h
             if rank == 0: print('forw horizontal '+str(rank),end=' -> ')
             z = gemm_func(inputs, weight, rank, size, group, row_group, col_group, ht)
             z = spmm_func(am_partitions, z, rank, size, group, row_group, col_group, ht)
-
+            
+                
         else:
             if rank == 0: print('forw vertical '+str(rank),end=' -> ')
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
@@ -434,10 +443,13 @@ class GCNFunc(torch.autograd.Function):
                     ctx.input_h = input_h
             z = gemm_func(x1, weight, rank, size, group, row_group, col_group, ht)
 
-        z.requires_grad = True        
+        if last_layer and not ht:
+            z = transpose_input(z,rank,size,row_group,1)
+        z.requires_grad = True                
         ctx.z = z
         #ht = not ht
 
+        
         #print('z '+str(z.size()))
         if activations:
             if func is F.log_softmax:
@@ -526,7 +538,7 @@ class GCNFunc(torch.autograd.Function):
                 inputs_h = ctx.input_h
             ht = True            
             grad_weight = outer_product2(inputs_h.t(), ag, rank, size, group)
-            print(grad_weight.size())
+            #print(grad_weight.size())
 
         if inputs.size(1) != grad_input.size(1) :
             dim = 0 if inputs.size(1) < grad_input.size(1) else 1
@@ -534,16 +546,16 @@ class GCNFunc(torch.autograd.Function):
 
         # print('grad input '+str(grad_input[0]) + ' rank ' + str(rank))
         # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
-        return grad_input, grad_weight, None, None, None, None, None, None, None, None, None
+        return grad_input, grad_weight, None, None, None, None, None, None, None, None, None, None
 
 def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order, data, rank, size, group, row_groups, col_groups, horizontal_tiled):
     global ht
     global run
     
     order1 = order[0] + order[3]
-    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order1, F.relu)
+    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order1, False, F.relu)
     order2 = order[1] + order[2]
-    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order2, F.log_softmax)
+    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order2, True, F.log_softmax)
    
     # print(outputs) 
     optimizer.zero_grad()
@@ -558,15 +570,13 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
     if ht:
         rank_train_mask = torch.split(data.train_mask.bool(), v_size, dim=0)[rank]
         datay_rank = torch.split(data.y, v_size, dim=0)[rank]
-    else:
-        tstart_comm = start_time(group, rank)
+    else:        
+        print("ERROR:")
+        exit()
         #print('dim '+str(0 if inputs.size(1) < grad_input.size(1) else 1))
         #print(str(inputs.size()) + ' but got ' + str(grad_input.size()))
-        outputs = transpose_input(outputs,rank,size, 1)
-        #print(grad_input.size())
-        dur = stop_time(group, rank, tstart_comm)
-        comm_time[run][rank] += dur
-        bcast_comm_time[run][rank] += dur
+        rep_id = rank // (size // replication)
+        outputs = transpose_input(outputs,rank,size, row_groups[rep_id], 1)        
         rank_train_mask = torch.split(data.train_mask.bool(), v_size, dim=0)[rank]
         datay_rank = torch.split(data.y, v_size, dim=0)[rank]
 
