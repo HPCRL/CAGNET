@@ -1,4 +1,4 @@
-Dataset,Method,#machine,#gpu_per_machine,Number of GPUs,Training Throughput (epochs/s),Epoch Time (s),d_comp,s_comp,communication,,
+Dataset,Method,#machine,#gpu_per_machine,Number of GPUs,Training Throughput (epochs/s),Epoch Time (s),d_comp,s_comp,communication,-,-
 OGB-Arxiv,CAGNET_base,1,1,1,15.3163,0.0653,0.0066,0.0483,0.0006,,
 OGB-Arxiv,CAGNET_base,1,2,2,11.9159,0.0839,0.0039,0.0459,0.0264,,
 OGB-Arxiv,CAGNET_base,2,2,4,7.386,0.1354,0.0023,0.058,0.067,,
@@ -79,7 +79,7 @@ Reddit,Ours,1,1,1,0.7805182641,1.2812,0.0232,2.0185,0.0066,ddss,
 Reddit,Ours,1,2,2,1.486988848,0.6725,0.0105,0.6201,0.03,ddss,
 Reddit,Ours,2,2,4,2.916134329,0.3429,0.0055,0.2772,0.0528,ddss,
 Reddit,Ours,4,2,8,3.645643456,0.2743,0.0036,0.2665,0.0322,dsds,
-OGB-Products,Ours,1,1,1,#DIV/0!,0,0,0,0,,
+OGB-Products,Ours,1,1,1,0,0,0,0,0,,
 OGB-Products,Ours,1,2,2,0.7144388083,1.3997,0.0356,1.0303,0.2735,dsds,sdsd-oom
 OGB-Products,Ours,2,2,4,1.06084982,0.9426,0.0162,0.5735,0.3048,sdsd,
 OGB-Products,Ours,4,2,8,1.674480911,0.5972,0.0086,0.3342,0.2142,sdsd,
