@@ -691,6 +691,16 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     print(f"rank: {rank} {outputs}")
 
 
+    if len(args.csv)>1 and rank==0:
+        ngpus = int(os.environ['WORLD_SIZE'])
+        train_tpt = 1/(total_time[median_idx][rank]/epochs)
+        logline = f"{graphname},CAGNET_1.5D,{ngpus},{train_tpt:.4f}\n"
+        if not osp.exists(args.csv):
+            with open(args.csv, 'a') as f:
+                f.write('Dataset,Method,Number of GPUs,Training Throughput (epochs/s)\n')
+        with open(args.csv, 'a') as f:
+            f.write(logline)
+
     if accuracy:
         # All-gather outputs to test accuracy
         output_parts = []
@@ -741,20 +751,20 @@ def main():
     if not download:
         mp.set_start_method('spawn', force=True)
         outputs = None
-        if "OMPI_COMM_WORLD_RANK" in os.environ.keys():
-            os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
+        #if "OMPI_COMM_WORLD_RANK" in os.environ.keys():
+        #    os.environ["RANK"] = os.environ["OMPI_COMM_WORLD_RANK"]
 
-        # Initialize distributed environment with SLURM
-        if "SLURM_PROCID" in os.environ.keys():
-            os.environ["RANK"] = os.environ["SLURM_PROCID"]
+        ## Initialize distributed environment with SLURM
+        #if "SLURM_PROCID" in os.environ.keys():
+        #    os.environ["RANK"] = os.environ["SLURM_PROCID"]
 
-        if "SLURM_NTASKS" in os.environ.keys():
-            os.environ["WORLD_SIZE"] = os.environ["SLURM_NTASKS"]
+        #if "SLURM_NTASKS" in os.environ.keys():
+        #    os.environ["WORLD_SIZE"] = os.environ["SLURM_NTASKS"]
 
-        if "MASTER_ADDR" not in os.environ.keys():
-            os.environ["MASTER_ADDR"] = "127.0.0.1"
+        #if "MASTER_ADDR" not in os.environ.keys():
+        #    os.environ["MASTER_ADDR"] = "127.0.0.1"
 
-        os.environ["MASTER_PORT"] = "1234"
+        #os.environ["MASTER_PORT"] = "1234"
         dist.init_process_group(backend='nccl')
         rank = dist.get_rank()
         size = dist.get_world_size()
@@ -833,7 +843,7 @@ def main():
         data.y = data.y.to(device)
     elif 'ogb' in graphname:
         path = '/scratch/general/nfs1/u1320844/dataset'
-        path = '../data/'
+        #path = '../data/'
         dataset = PygNodePropPredDataset(graphname, path,transform=T.NormalizeFeatures())
         #evaluator = Evaluator(name=graphname)
         if 'mag' in graphname:
@@ -904,6 +914,7 @@ if __name__ == '__main__':
     parser.add_argument("--activations", type=str)
     parser.add_argument("--accuracy", type=str)
     parser.add_argument("--download", type=bool)
+    parser.add_argument("--csv", type=str, default='')
 
     args = parser.parse_args()
     print(args)
