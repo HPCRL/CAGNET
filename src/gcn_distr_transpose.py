@@ -71,7 +71,7 @@ def start_time(group, rank, subset=False, src=None):
 
     if not timing:
         return 0.0
-    
+
     barrier_tstart = time.time()
 
     dist.barrier(group)
@@ -109,12 +109,12 @@ def block_row(adj_matrix, am_partitions, inputs, weight, rank, size):
 
     z_loc = torch.cuda.FloatTensor(n_per_proc, inputs.size(1)).fill_(0)
     # z_loc = torch.zeros(adj_matrix.size(0), inputs.size(1))
-    
+
     inputs_recv = torch.zeros(inputs.size())
 
     part_id = rank % size
 
-    z_loc += torch.mm(am_partitions[part_id].t(), inputs) 
+    z_loc += torch.mm(am_partitions[part_id].t(), inputs)
 
     for i in range(1, size):
         part_id = (rank + i) % size
@@ -132,11 +132,11 @@ def block_row(adj_matrix, am_partitions, inputs, weight, rank, size):
         else:
             dist.recv(tensor=inputs_recv, src=src)
             dist.send(tensor=inputs, dst=dst)
-        
+
         inputs = inputs_recv.clone()
 
-        # z_loc += torch.mm(am_partitions[part_id], inputs) 
-        z_loc += torch.mm(am_partitions[part_id].t(), inputs) 
+        # z_loc += torch.mm(am_partitions[part_id], inputs)
+        z_loc += torch.mm(am_partitions[part_id].t(), inputs)
 
 
     # z_loc = torch.mm(z_loc, weight)
@@ -151,7 +151,7 @@ def outer_product(adj_matrix, grad_output, rank, size, group):
 
 
     n_per_proc = math.ceil(float(adj_matrix.size(0)) / size)
-    
+
     tstart_comp = start_time(group, rank)
 
     # A * G^l
@@ -191,7 +191,7 @@ def outer_product2(inputs, ag, rank, size, group):
     dur = stop_time(group, rank, tstart_comp)
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
-    
+
     tstart_comm = start_time(group, rank)
     # reduction on grad_weight low-rank matrices
     dist.all_reduce(grad_weight, op=dist.reduce_op.SUM, group=group)
@@ -234,7 +234,7 @@ def transpose_input(node_count,inputs,rank,size,dim):
             print(inputs.size())
             '''
             input_recv = torch.zeros(row_count[i], col_count[rank], device=device)
-         
+
             #print('buffer size '+str(input_recv.size()))
             if i < rank :
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
@@ -242,7 +242,7 @@ def transpose_input(node_count,inputs,rank,size,dim):
             else:
                 dist.recv(tensor=input_recv, src=i)
                 dist.send(tensor=input_2d[i].contiguous(), dst=i)
-            
+
             recv[i] = input_recv
         inputs = torch.cat(recv,0)
         #print('size after transpose')
@@ -292,33 +292,33 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
     global run
 
 
-    
+
     # n_per_proc = math.ceil(float(adj_matrix.size(1)) / size)
     n_per_proc = math.ceil(float(node_count) / size)
 
     # z_loc = torch.cuda.FloatTensor(adj_matrix.size(0), inputs.size(1), device=device).fill_(0)
     # z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
     # z_loc = torch.zeros(adj_matrix.size(0), inputs.size(1))
-    
+
     inputs_recv = torch.cuda.FloatTensor(n_per_proc, inputs.size(1), device=device).fill_(0)
     # inputs_recv = torch.zeros(n_per_proc, inputs.size(1))
 
 
-    
+
     for i in range(1):
 #        if i == rank:            inputs_recv = inputs.clone()
 #        elif i == size - 1:            inputs_recv = torch.cuda.FloatTensor(am_partitions[i].size(1), inputs.size(1), device=device).fill_(0)
             # inputs_recv = torch.zeros(list(am_partitions[i].t().size())[1], inputs.size(1))
         transpose = True
         if horizontal_tiled:
-            tstart_comm = start_time(group, rank)        
-            inputs_recv = transpose_input(node_count,inputs,rank,size,0)       
+            tstart_comm = start_time(group, rank)
+            inputs_recv = transpose_input(node_count,inputs,rank,size,0)
             dur = stop_time(group, rank, tstart_comm)
             comm_time[run][rank] += dur
             bcast_comm_time[run][rank] += dur
             transpose = False
         else:
-            #Hacked a solution here but we need a better way to do this 
+            #Hacked a solution here but we need a better way to do this
             #inputs_recv = torch.cat(torch.split(inputs, inputs.size(1), dim=1),0)
             inputs_recv = inputs.detach().contiguous()
             #print(inputs_recv)
@@ -327,7 +327,7 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
         z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs_recv.size(1), device=device).fill_(0)
         # print('size of output '+ str(z_loc.size()))
         tstart_comp = start_time(group, rank)
-        
+
         '''
         print(am_partitions[i].size(0))
         print(am_partitions[i].size(1))
@@ -336,8 +336,8 @@ def broad_func(node_count, am_partitions, inputs, rank, size, group, horizontal_
         '''
         #inputs_recv = torch.cuda.FloatTensor(n_per_proc, inputs.size(1), device=device).fill_(1)
         #print(am_partitions)
-        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
-                        am_partitions[i].values(), am_partitions[i].size(0), 
+        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
+                        am_partitions[i].values(), am_partitions[i].size(0),
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
         #print('first SpMM was OK!')
@@ -379,7 +379,7 @@ class GCNFunc(torch.autograd.Function):
         ctx.group = group
         ctx.abcd = 1
         ctx.func = func
-        #1 = 0 
+        #1 = 0
         z = 0
         if ht:
             if rank == 0: print('forw horizontal '+str(rank))
@@ -482,8 +482,8 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     ht = horizontal_tiled
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, F.log_softmax)
-   
-    #print(outputs) 
+
+    #print(outputs)
     optimizer.zero_grad()
     #rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
     #datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
@@ -512,8 +512,8 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
 def test(outputs, data, vertex_count, rank):
     logits, accs = outputs, []
     for _, mask in data('train_mask', 'val_mask', 'test_mask'):
-        pred = logits[mask].max(1)[1]
-        acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+        pred = logits[mask.bool()].max(1)[1]
+        acc = pred.eq(data.y[mask.bool()]).sum().item() / mask.sum().item()
         accs.append(acc)
 
     if len(accs) == 1:
@@ -579,7 +579,7 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
     #         deg_map[v.item()] = degv
 
     #     values[i] = values[i] / (math.sqrt(degu) * math.sqrt(degv))
-    
+
     adj_part = adj_part.coalesce()
     deg = torch.histc(adj_matrix[0].double(), bins=node_count)
     deg = deg.pow(-0.5)
@@ -599,15 +599,15 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
                                      size=(col_len, col_len),
                                      requires_grad=False, device=torch.device("cpu"))
     # adj_part = torch.sparse.mm(torch.sparse.mm(dleft, adj_part), dright)
-    ad_ind, ad_val = torch_sparse.spspmm(adj_part._indices(), adj_part._values(), 
+    ad_ind, ad_val = torch_sparse.spspmm(adj_part._indices(), adj_part._values(),
                                             dright._indices(), dright._values(),
                                             adj_part.size(0), adj_part.size(1), dright.size(1))
 
-    adj_part_ind, adj_part_val = torch_sparse.spspmm(dleft._indices(), dleft._values(), 
+    adj_part_ind, adj_part_val = torch_sparse.spspmm(dleft._indices(), dleft._values(),
                                                         ad_ind, ad_val,
                                                         dleft.size(0), dleft.size(1), adj_part.size(1))
 
-    adj_part = torch.sparse_coo_tensor(adj_part_ind, adj_part_val, 
+    adj_part = torch.sparse_coo_tensor(adj_part_ind, adj_part_val,
                                                 size=(adj_part.size(0), adj_part.size(1)),
                                                 requires_grad=False, device=torch.device("cpu"))
 
@@ -626,12 +626,12 @@ def symmetric(adj_matrix):
     # print(adj_matrix_transpose)
 
     adj_matrix = torch.cat([adj_matrix,adj_matrix_transpose],1)
-   
-    adj_matrix, _ = add_remaining_self_loops(adj_matrix) 
-   
+
+    adj_matrix, _ = add_remaining_self_loops(adj_matrix)
+
     adj_matrix.to(device)
     return adj_matrix
-    
+
 
 
 def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
@@ -659,25 +659,25 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
         for i in range(len(am_pbyp)):
             if i == size - 1:
                 last_node_count = vtx_indices[i + 1] - vtx_indices[i]
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), 
+                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)),
                                                         size=(last_node_count, proc_node_count),
                                                         requires_grad=False)
 
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
+                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i],
                                                 vtx_indices[rankf])
             else:
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), 
+                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)),
                                                         size=(n_per_proc, proc_node_count),
                                                         requires_grad=False)
 
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
+                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i],
                                                 vtx_indices[rankf])
 
         for i in range(len(am_partitions)):
             proc_node_count = vtx_indices[i + 1] - vtx_indices[i]
-            am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], 
-                                                    torch.ones(am_partitions[i].size(1)), 
-                                                    size=(node_count, proc_node_count), 
+            am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i],
+                                                    torch.ones(am_partitions[i].size(1)),
+                                                    size=(node_count, proc_node_count),
                                                     requires_grad=False)
             am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
 
@@ -691,15 +691,15 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
         inputs_loc = input_partitions[rank]
 
     row_count = []
-    col_count = []    
+    col_count = []
     input_row_partition = torch.split(inputs, math.ceil(float(inputs.size(0)) / size), dim=0)
     for inp in input_row_partition:
         row_count += [inp.size(0)]
 
     input_col_partition = torch.split(inputs, math.ceil(float(inputs.size(1)) / size), dim=1)
     for inp in input_col_partition:
-        col_count += [inp.size(1)] 
-    
+        col_count += [inp.size(1)]
+
     print(input_partitions[0].size())
     print(f"rank: {rankf} adj_matrix_loc.size: {adj_matrix_loc.size()}", flush=True)
     print(f"rank: {rankf} inputs.size: {inputs.size()}", flush=True)
@@ -722,8 +722,8 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     # inputs_loc = torch.rand(n_per_proc, inputs.size(1))
 
     # adj_matrix = symmetric(adj_matrix)
-   
-    inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data, 
+
+    inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data,
                                                                 features, classes, device)
 
     inputs_loc = inputs_loc.to(device)
@@ -775,7 +775,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
         timing_on = timing == True
         timing = False
-        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data, 
+        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data,
                                 rank, size, group, horizontal_tiled)
         if timing_on:
             timing = True
@@ -786,7 +786,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         # for epoch in range(1, 201):
         print(f"Starting training... rank {rank} run {i}", flush=True)
         for epoch in range(1, epochs):
-            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data, 
+            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data,
                                     rank, size, group, horizontal_tiled)
             print("Epoch: {:03d}".format(epoch), flush=True)
 
@@ -797,7 +797,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     # Get median runtime according to rank0 and print that run's breakdown
     dist.barrier(group)
     if rank == 0:
-        total_times_r0 = [] 
+        total_times_r0 = []
         for i in range(run_count):
             total_times_r0.append(total_time[i][0])
 
@@ -807,8 +807,8 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         median_idx = torch.cuda.LongTensor([median_idx])
     else:
         median_idx = torch.cuda.LongTensor([0])
-        
-    dist.broadcast(median_idx, src=0, group=group)        
+
+    dist.broadcast(median_idx, src=0, group=group)
     median_idx = median_idx.item()
     print(f"rank: {rank} median_run: {median_idx}")
     print(f"rank: {rank} total_time: {total_time[median_idx][rank]}")
@@ -822,8 +822,18 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     print(f"rank: {rank} op1_comm_time: {op1_comm_time[median_idx][rank]}")
     print(f"rank: {rank} op2_comm_time: {op2_comm_time[median_idx][rank]}")
     print(f"rank: {rank} {outputs}")
-    
-    
+
+    if len(args.csv)>1 and rank==0:
+        ngpus = int(os.environ['WORLD_SIZE'])
+        train_tpt = 1/(total_time[median_idx][rank]/epochs)
+        logline = f"{graphname},GNN-RDM,{ngpus},{train_tpt:.4f}\n"
+        if not osp.exists(args.csv):
+            with open(args.csv, 'a') as f:
+                f.write('Dataset,Method,Number of GPUs,Training Throughput (epochs/s)\n')
+        with open(args.csv, 'a') as f:
+            f.write(logline)
+
+
     if accuracy:
         # All-gather outputs to test accuracy
         output_parts = []
@@ -833,12 +843,12 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
             output_parts.append(torch.cuda.FloatTensor(n_per_proc, classes, device=device).fill_(0))
 
         if outputs.size(0) != n_per_proc:
-            pad_row = n_per_proc - outputs.size(0) 
+            pad_row = n_per_proc - outputs.size(0)
             outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=device)), dim=0)
 
         dist.all_gather(output_parts, outputs)
         output_parts[rank] = outputs
-        
+
         padding = inputs.size(0) - n_per_proc * (size - 1)
         output_parts[size - 1] = output_parts[size - 1][:padding,:]
 
@@ -973,7 +983,7 @@ def main():
         data.y = data.y.to(device)
     elif 'ogb' in graphname:
         path = '/scratch/general/nfs1/u1320844/dataset'
-        path = '../data/'
+        #path = '../data/'
         dataset = PygNodePropPredDataset(graphname, path,transform=T.NormalizeFeatures())
         #evaluator = Evaluator(name=graphname)
         if 'mag' in graphname:
@@ -997,14 +1007,22 @@ def main():
             test_idx = split_idx['test']
 
         data.x.requires_grad = True
-        inputs = data.x.to(device)
+        inputs = data.x
+        num_nodes = len(data.x)
         #inputs.requires_grad = True
         data.y = data.y.squeeze().to(device)
         edge_index = data.edge_index
-        edge_index = symmetric(edge_index)
-        num_features = dataset.num_features if not 'mag' in graphname else 128
+        if 'arxiv' in graphname:
+            edge_index = symmetric(edge_index)
+        data.x = None
+        data.edge_index = None
+        nf_dict = {}
+        nf_dict['ogbn-arxiv'] = 128
+        nf_dict['ogbn-mag'] = 128
+        nf_dict['ogbn-papers100M'] = 128
+        nf_dict['ogbn-products'] = 100
+        num_features = nf_dict[graphname]#$dataset.num_features if not ('mag' in graphname or 'paper' in graphname) else 128
         num_classes = dataset.num_classes
-        num_nodes = len(data.x)
         train_mask = torch.zeros(num_nodes)
         train_mask[train_idx] = 1
         val_mask = torch.zeros(num_nodes)
@@ -1024,7 +1042,7 @@ def main():
         adj_matrix = edge_index
 
 
-    init_process(rank, size, inputs, adj_matrix, data, num_features, num_classes, device, outputs, 
+    init_process(rank, size, inputs, adj_matrix, data, num_features, num_classes, device, outputs,
                     run)
 
     if outputs is not None:
@@ -1043,6 +1061,7 @@ if __name__ == '__main__':
     parser.add_argument("--activations", type=str)
     parser.add_argument("--accuracy", type=str)
     parser.add_argument("--download", type=bool)
+    parser.add_argument("--csv", type=str, default='')
 
     args = parser.parse_args()
     print(args)
@@ -1065,5 +1084,5 @@ if __name__ == '__main__':
             exit()
 
     print(f"Arguments: epochs: {epochs} graph: {graphname} timing: {timing} mid: {mid_layer} norm: {normalization} act: {activations} acc: {accuracy} runs: {run_count}")
-    
+
     print(main())
