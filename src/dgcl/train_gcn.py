@@ -28,7 +28,7 @@ def setup(rank, world_size, args):
     # os.environ['MASTER_ADDR'] = 'localhost'
     # os.environ['MASTER_PORT'] = '12356'
     if rank != 0:
-        logs_file = args.logs_dir + '/r' + str(rank) + '.out'
+        logs_file = './r' + str(rank) + '.out'
         sys.stdout = open(logs_file, 'w')
     logs_name = 'GCCL.RANK.' + str(rank)
     ragdoll.init_logs(logs_name)
@@ -57,7 +57,6 @@ def evaluate(model, features, labels, mask):
         _, indices = torch.max(logits, dim=1)
         correct = torch.sum(indices == labels)
         return correct.item() * 1.0 / len(labels), correct.item() * 1.0, len(labels)
-
 def eval2(logits, labels, mask):
     with torch.no_grad():
         logits = logits[mask]
@@ -123,12 +122,47 @@ def run(rank, world_size, args):
         torch.cuda.synchronize()
         t2 = time.time()
         dur.append(time.time() - t0)
+        #train_acc, _, _ = eval2(logits, labels, train_mask)
+        #test_acc, _, _ = eval2(logits, labels, test_mask)
+        #test_acc, _, _ = evaluate(model, features, labels, test_mask)
+        #print('train:{:.4f} test:{:.4f} loss:{:.4f}'.format(train_acc, test_acc, loss.item()))
+        # print('acc is {}, loss is {}, this epoch using time {}, avg time {}.'.format(
+        #    acc, loss.item(), dur[-1] if epoch >= 3 else 0, np.mean(dur)))
+        #print('Using time to synchronize model', t2 - t1)
+        #print('Peak memory is {} GB'.format(
+        #    torch.cuda.max_memory_allocated(dev_id) / 1e9))
+        print('this epoch uses time {} s, avg time {} s.'.format(
+            dur[-1] if epoch >= 3 else 0, np.mean(dur)))
+        #tmp = np.sum(dur)
+        #if tmp>200:
+        #    break
+        #logline = f'{args.dataset},DGCL,{epoch},{tmp:.4f},{test_acc:.4f}\n'
+        #if rank==0:
+        #    print(logline)
+        #    with open(args.csv,'a') as f:
+        #        f.write('{},{},{},{}\n'.format(args.dataset, args.comm,args.world_size, np.mean(dur)))
+    if rank == 0:
+        with open(args.csv,'a') as f:
+            train_tpt = 1/np.mean(dur)
+            f.write('{},DGCL,{},{}\n'.format(args.dataset, args.world_size, train_tpt))
 
-    if rank==0:
-        with open('dgcl.csv','a') as f:
-            f.write('{},DGCL,{},{}\n'.format(args.dataset, args.world_size, np.mean(dur)))
+    ##acc, corr, total = evaluate(model, features, labels, test_mask)
+    ##print('my corr is', corr, 'my total is', total)
+    ##corr = torch.Tensor([corr]).cuda(dev_id)
+    ##total = torch.Tensor([total]).cuda(dev_id)
+    ##corrs, totals = [], []
+    ##for i in range(world_size):
+    ##    corrs.append(torch.Tensor([0]).cuda(dev_id))
+    ##    totals.append(torch.Tensor([0]).cuda(dev_id))
+    ##torch.distributed.all_gather(corrs, corr)
+    ##torch.distributed.all_gather(totals, total)
+    ##print('corrs is', corrs)
+    ##print('totals is', totals)
+    ##corr = torch.stack(corrs, dim=0).sum(dim=0).item() * 1.0
+    ##total = torch.stack(totals, dim=0).sum(dim=0).item() * 1.0
+    ##print('Test acc is', corr / total)
 
-    cleanup()
+    #cleanup()
 
 
 def kill_proc(p):
@@ -180,9 +214,9 @@ if __name__ == '__main__':
                         help="learning rate")
     parser.add_argument("--n-epochs", type=int, default=10,
                         help="number of training epochs")
-    parser.add_argument("--n-hidden", type=int, default=16,
+    parser.add_argument("--n-hidden", type=int, default=128,
                         help="number of hidden gcn units")
-    parser.add_argument("--n-layers", type=int, default=1,
+    parser.add_argument("--n-layers", type=int, default=0,
                         help="number of hidden gcn layers")
     parser.add_argument("--weight-decay", type=float, default=5e-4,
                         help="Weight for L2 loss")
@@ -216,6 +250,8 @@ if __name__ == '__main__':
                         type=int, help="Distributed process per node")
     parser.add_argument("--master_addr", default="localhost",
                         type=str, help="Master address")
+    parser.add_argument("--csv", type=str,
+                        default="", help="output log file")
     parser.set_defaults(self_loop=False)
     args = parser.parse_args()
     SetArgs(args)

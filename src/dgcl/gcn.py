@@ -27,9 +27,9 @@ class GCN(nn.Module):
         self.g = g
         self.layers = nn.ModuleList()
         # input layer
-        self.layers.append(nn.Linear(in_feats, 128))
+        #self.layers.append(nn.Linear(in_feats, 128))
         self.layers.append(
-            GraphConv(n_hidden, n_hidden, n_nodes, local_n_nodes, apply_gather=True, no_remote=True, norm='none', activation=activation, comm_net=comm_net))
+            GraphConv(in_feats, n_hidden, n_nodes, local_n_nodes, apply_gather=True, no_remote=True, norm='none', activation=activation, comm_net=comm_net))
         # hidden layers
         for i in range(n_layers - 1):
             self.layers.append(
@@ -42,9 +42,9 @@ class GCN(nn.Module):
     def forward(self, features):
         h = features
         for i, layer in enumerate(self.layers):
-            if i == 0:
-                h = layer(h)
-                continue
+            #if i == 0:
+            #    h = layer(h)
+            #    continue
             if i != 0:
                 h = self.dropout(h)
             h = layer(self.g, h)
