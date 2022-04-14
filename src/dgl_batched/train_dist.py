@@ -311,9 +311,13 @@ def run(args, device, data):
             print('Part {}, Val Acc {:.4f}, Test Acc {:.4f}, time: {:.4f}'.format(g.rank(), val_acc, tacc,
                                                                                   time.time() - start))
             #rk = os.environ['RANK']
-            logline = f'{args.graph_name},{args.batch_size},{epoch},{cumulative_time:.4f},r{g.rank()},{tacc.item():.4f}\n'
+            logline = f'{args.graph_name},{args.batch_size},{epoch},{cumulative_time:.4f},{tacc.item():.4f}\n'
             if args.local_rank == 0 and os.environ['RANK'] =='0':
-                with open('NCCLacc_logs.csv', 'a') as f:
+                if len(args.csv) < 2:
+                    with open(args.csv, 'a') as f:
+                        f.write('Dataset,Batchsize,Epoch,Time,Acc\n')
+
+                with open(args.csv, 'a') as f:
                     f.write(logline)
 
 def main(args):
@@ -358,6 +362,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='GCN')
     register_data_args(parser)
     parser.add_argument('--graph_name', type=str, help='graph name')
+    parser.add_argument('--csv', type=str, default='')
     parser.add_argument('--id', type=int, help='the partition id')
     parser.add_argument('--ip_config', type=str, help='The file for IP configuration')
     parser.add_argument('--part_config', type=str, help='The path to the partition config file')

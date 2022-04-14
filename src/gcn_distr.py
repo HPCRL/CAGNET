@@ -609,13 +609,54 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
         dist.barrier(group)
         tstart = time.time()
+        cumulative_time = 0
+        loglines = []
 
         # for epoch in range(1, 201):
         print(f"Starting training... rank {rank} run {i}", flush=True)
-        for epoch in range(1, epochs):
+        for epoch in range(epochs):
+            if cumulative_time>200:
+                break
+            ep_s = time.time()
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data,
                                     rank, size, group)
             print("Epoch: {:03d}".format(epoch), flush=True)
+            cumulative_time += time.time()-ep_s
+            if len(args.acc_csv)>2:
+                # All-gather outputs to test accuracy
+                output_parts = []
+                n_per_proc = math.ceil(float(inputs.size(0)) / size)
+                # print(f"rows: {am_pbyp[-1].size(0)} cols: {classes}", flush=True)
+                for i in range(size):
+                    output_parts.append(torch.cuda.FloatTensor(n_per_proc, classes, device=device).fill_(0))
+
+                if outputs.size(0) != n_per_proc:
+                    pad_row = n_per_proc - outputs.size(0)
+                    outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=device)), dim=0)
+
+                dist.all_gather(output_parts, outputs)
+                output_parts[rank] = outputs
+
+                padding = inputs.size(0) - n_per_proc * (size - 1)
+                output_parts[size - 1] = output_parts[size - 1][:padding,:]
+
+                outputs = torch.cat(output_parts, dim=0)
+
+                train_acc, val_acc, tmp_test_acc = test(outputs, data, am_pbyp[0].size(1), rank)
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    test_acc = tmp_test_acc
+                #log = 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'
+                logline = f'{graphname},CAGNET-1D,{epoch},{cumulative_time:.4f},{tmp_test_acc:.4f}\n'
+                if rank == 0 and len(args.acc_csv)>2:
+                    print(logline)
+                    if not osp.exists(args.acc_csv):
+                        with open(args.acc_csv,'a') as ff:
+                            ff.write('Dataset,Method,Epoch,Time (seconds),Accuracy\n')
+                    with open(args.acc_csv,'a') as ff:
+                        ff.write(logline)
+
+                #print(log.format(900, train_acc, best_val_acc, test_acc))
 
         # dist.barrier(group)
         tstop = time.time()
@@ -890,6 +931,7 @@ if __name__ == '__main__':
     parser.add_argument("--accuracy", type=str)
     parser.add_argument("--download", type=bool)
     parser.add_argument("--csv", type=str, default='')
+    parser.add_argument("--acc_csv", type=str, default='')
 
     args = parser.parse_args()
     print(args)
