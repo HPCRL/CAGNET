@@ -75,6 +75,7 @@ def start_time(group, rank, subset=False, src=None):
     
     barrier_tstart = time.time()
 
+    #dist.barrier(group,device_ids=[0])
     dist.barrier(group)
     barrier_tstop = time.time()
     barrier_time[run][rank] += barrier_tstop - barrier_tstart
@@ -88,9 +89,10 @@ def start_time(group, rank, subset=False, src=None):
 def stop_time(group, rank, tstart):
     if not timing:
         return 0.0
+    #dist.barrier(group,device_ids=[0])    
     dist.barrier(group)
     devid = rank_to_devid(rank, acc_per_rank)
-    device = torch.device('cuda:{}'.format(devid))
+    #device = torch.device('cuda:{}'.format(devid))
     # torch.cuda.synchronize(device=device)
 
     tstop = time.time()
@@ -165,7 +167,7 @@ def outer_product(adj_matrix, grad_output, rank, size, group):
     tstart_comm = start_time(group, rank)
 
     # reduction on A * G^l low-rank matrices
-    dist.all_reduce(ag, op=dist.reduce_op.SUM, group=group)
+    dist.all_reduce(ag, op=dist.ReduceOp.SUM, group=group)
 
     dur = stop_time(group, rank, tstart_comm)
     comm_time[run][rank] += dur
@@ -195,7 +197,7 @@ def outer_product2(inputs, ag, rank, size, group):
     
     tstart_comm = start_time(group, rank)
     # reduction on grad_weight low-rank matrices
-    dist.all_reduce(grad_weight, op=dist.reduce_op.SUM, group=group)
+    dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=group)
 
     dur = stop_time(group, rank, tstart_comm)
     comm_time[run][rank] += dur
@@ -206,6 +208,7 @@ def outer_product2(inputs, ag, rank, size, group):
 def transpose_input(inputs,rank,size,row_group,dim):
     #print('in transpose '+str(rank)+' at dim '+str(dim))
     global device
+    global host
     global comm_time
     global comp_time
     global scomp_time
@@ -213,7 +216,9 @@ def transpose_input(inputs,rank,size,row_group,dim):
     global run
     global ht
     global replication
-    
+    dev = inputs.get_device()
+    if dev == -1:
+        dev = host
     # if dim = 0 vertical tiling, dim = 1 horizontal tiling        
     col_count = size//replication    
     rep_id = rank//col_count
@@ -243,7 +248,7 @@ def transpose_input(inputs,rank,size,row_group,dim):
         #print(recv_col)
         #print(str(dim_count)+' ' +str(rank)+' '+str(p_i) + ' ' +str(recv_row))
         #print(str(rank)+ " " +str([dim_count[rep_id][0][recv_row],dim_count[rep_id][1][recv_col]]))
-        input_recv = torch.zeros(dim_count[rep_id][0][recv_row], dim_count[rep_id][1][recv_col], device=device)   
+        input_recv = torch.zeros(dim_count[rep_id][0][recv_row], dim_count[rep_id][1][recv_col], device=dev)   
         #print(input_recv.size())
         if p_i < rank :
             dist.send(tensor=input_2d[il].contiguous(), dst=p_i)
@@ -268,21 +273,27 @@ def transpose_input(inputs,rank,size,row_group,dim):
 
 def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, horizontal_tiled):
     global device
+    global host
     global comm_time
     global comp_time
     global scomp_time
     global bcast_comm_time
     global run
     global replication    
-    
+   
+    dev = inputs.get_device() 
+    if dev == -1:
+        dev = host
     #print('spmm at rank '+str(rank))
     col_count = size//replication
     rep_id = rank//col_count
     inputs_ = inputs.detach().contiguous() #torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
     if horizontal_tiled:
         inputs_ = transpose_input(inputs,rank,size,row_group,0)   
+        #dist.barrier(row_group,device_ids=[0])
         dist.barrier(row_group)
     else:
+        #dist.barrier(col_group,device_ids=[0])
         dist.barrier(col_group)
     #print(am_partitions[0].size())
     #print(inputs_.size())
@@ -299,7 +310,7 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
             inputs_recv = inputs_
         else:
             row_recv = sum(dim_count[i][0])            
-            inputs_recv = torch.cuda.FloatTensor(row_recv, inputs_.size(1), device=device).fill_(0)
+            inputs_recv = torch.cuda.FloatTensor(row_recv, inputs_.size(1), device=dev).fill_(0)
                                 
         tstart_comm = start_time(col_group, rank)        
         dist.broadcast(inputs_recv, src=tile_id, group=col_group)        
@@ -309,26 +320,31 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         tstart_comp = start_time(col_group, rank)
         #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
         #print(am_partitions[i].size())
-        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
-                            am_partitions[i].values(), am_partitions[i].size(0), 
-                            am_partitions[i].size(1), inputs_recv, z_loc)
+        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
+                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
+                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
 
         dur = stop_time(col_group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
-    
+    z_loc = z_loc.to(dev)
     #dist.barrier(col_group)    
     return z_loc
 
 
 def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizontal_tiled):
     global device
+    global host
     global comm_time
     global comp_time
     global scomp_time
     global bcast_comm_time
     global run
-
+    
+    dev = inputs.get_device()
+    if dev == -1:
+        dev = host
+    #dist.barrier(row_group,device_ids=[0])
     dist.barrier(row_group)
     #print('gemm at rank '+str(rank))
     col_count = size//replication
@@ -337,13 +353,17 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     if not horizontal_tiled:
         inputs_recv = transpose_input(inputs,rank,size,row_group,1)
 
+    inputs_recv = inputs_recv.to(device)
+    weight = weight.to(device)
     tstart_comp = start_time(group, rank)
     z = torch.mm(inputs_recv, weight)
     dur = stop_time(group, rank, tstart_comp)
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
     
+    #dist.barrier(row_group,device_ids=[0])
     dist.barrier(row_group)
+    z = z.to(dev)
 
     return z
 
@@ -475,7 +495,7 @@ class GCNFunc(torch.autograd.Function):
         global ht
         global x1
 
-        #if ctx.rank == 0: print('grad back '+str(grad_output.size()))
+        if ctx.rank == 0: print('grad back '+str(grad_output.size()))
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
@@ -763,7 +783,7 @@ def get_proc_groups(rank, size):
 
 def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
     #global row_count
-    #global col_count
+    #global col_count   
     '''
     This function will divide sparse matrix into replication
     row panels. Each row panel then will be divided into 
@@ -775,6 +795,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     global dim_count
     global ht
     global replication
+    global host
     node_count = inputs.size(0)
     n_per_proc = math.ceil(float(node_count) / replication)
     c_per_proc = math.ceil(float(node_count) / (replication))
@@ -933,7 +954,7 @@ def find_candidates(features,hidden,classes,layers):
             candidates += [c[2]]           
     return candidates
 
-def run(rank, size, inputs, adj_matrix, data, features, classes, device):
+def run(rank, size, inputs, adj_matrix, data, features, classes, device, host):
     global epochs
     global mid_layer
     global run
@@ -946,6 +967,8 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     group = dist.new_group(list(range(size)))
     row_groups, col_groups = get_proc_groups(rank, size)
 
+    #torch.distributed.barrier(device_ids=list(range(acc_per_rank)))
+
     if rank >= size:
         return
 
@@ -953,32 +976,43 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     # inputs_loc = torch.rand(n_per_proc, inputs.size(1))
 
     # adj_matrix = symmetric(adj_matrix)
+     
+    # move everything to host
+    dev = host
+    # move to device
+    #dev = device
+
    
     inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data, 
-                                                                features, classes, device)
+                                                                features, classes, dev)
 
     
-    inputs_loc = inputs_loc.to(device)
-    adj_matrix_loc = adj_matrix_loc.to(device)
+    inputs_loc = inputs_loc.to(dev)
+    adj_matrix_loc = adj_matrix_loc.to(dev)
     for i in range(len(am_pbyp)):
-        am_pbyp[i] = am_pbyp[i].coalesce().to(device)
+        am_pbyp[i] = am_pbyp[i].coalesce().to(dev)
 
+
+       
     for i in range(run_count):
         run = i
         torch.manual_seed(0)
         weight1_nonleaf = torch.rand(features, mid_layer, requires_grad=True)
-        weight1_nonleaf = weight1_nonleaf.to(device)
+        weight1_nonleaf = weight1_nonleaf.to(dev)
         weight1_nonleaf.retain_grad()
 
         weight2_nonleaf = torch.rand(mid_layer, classes, requires_grad=True)
-        weight2_nonleaf = weight2_nonleaf.to(device)
+        weight2_nonleaf = weight2_nonleaf.to(dev)
         weight2_nonleaf.retain_grad()
 
         weight1 = Parameter(weight1_nonleaf)
         weight2 = Parameter(weight2_nonleaf)
 
         optimizer = torch.optim.Adam([weight1, weight2], lr=0.01)
+        print('group barrier')
+        #dist.barrier(group,device_ids=[0])
         dist.barrier(group)
+        print('gb')
 
         tstart = 0.0
         tstop = 0.0
@@ -1028,6 +1062,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         if timing_on:
             timing = True
 
+        #dist.barrier(group,device_ids=[0])
         dist.barrier(group)
         tstart = time.time()
 
@@ -1061,6 +1096,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         total_time[i][rank] = tstop - tstart
 
     # Get median runtime according to rank0 and print that run's breakdown
+    #dist.barrier(group,device_ids=[0])
     dist.barrier(group)
     if rank == 0:
         total_times_r0 = [] 
@@ -1098,11 +1134,11 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         n_per_proc = math.ceil(float(inputs.size(0)) / size)
         # print(f"rows: {am_pbyp[-1].size(0)} cols: {classes}", flush=True)
         for i in range(size):
-            output_parts.append(torch.cuda.FloatTensor(n_per_proc, classes, device=device).fill_(0))
+            output_parts.append(torch.cuda.FloatTensor(n_per_proc, classes, device=dev).fill_(0))
 
         if outputs.size(0) != n_per_proc:
             pad_row = n_per_proc - outputs.size(0) 
-            outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=device)), dim=0)
+            outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=dev)), dim=0)
 
         dist.all_gather(output_parts, outputs)
         output_parts[rank] = outputs
@@ -1125,17 +1161,19 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 def rank_to_devid(rank, acc_per_rank):
     return rank % acc_per_rank
 
-def init_process(rank, size, inputs, adj_matrix, data, features, classes, device, outputs, fn):
-    run_outputs = fn(rank, size, inputs, adj_matrix, data, features, classes, device)
+def init_process(rank, size, inputs, adj_matrix, data, features, classes, device, host, outputs, fn):
+    run_outputs = fn(rank, size, inputs, adj_matrix, data, features, classes, device, host)
     if outputs is not None:
         outputs[rank] = run_outputs.detach()
 
 def main():
     global device
+    global host
     global graphname
 
     print(socket.gethostname())
     seed = 0
+
 
     if not download:
         mp.set_start_method('spawn', force=True)
@@ -1156,7 +1194,8 @@ def main():
 
         os.environ["MASTER_PORT"] = "1234"
         '''
-        dist.init_process_group(backend='nccl')
+        #dist.init_process_group(backend='nccl')
+        dist.init_process_group(backend='gloo')
         rank = dist.get_rank()
         size = dist.get_world_size()
         if 2 ** round(math.log2(size / replication)) != size//replication:
@@ -1168,21 +1207,23 @@ def main():
         # device = torch.device('cpu')
         devid = rank_to_devid(rank, acc_per_rank)
         device = torch.device('cuda:{}'.format(devid))
+        host = torch.device('cpu')
         print(f"device: {device}")
         torch.cuda.set_device(device)
         curr_devid = torch.cuda.current_device()
         # print(f"curr_devid: {curr_devid}", flush=True)
         devcount = torch.cuda.device_count()
 
+    dev = host
     if graphname == "Cora":
         path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
         dataset = Planetoid(path, graphname, transform=T.NormalizeFeatures())
         data = dataset[0]
-        data = data.to(device)
+        data = data.to(dev)
         data.x.requires_grad = True
-        inputs = data.x.to(device)
+        inputs = data.x.to(dev)
         inputs.requires_grad = True
-        data.y = data.y.to(device)
+        data.y = data.y.to(dev)
         edge_index = data.edge_index
         num_features = dataset.num_features
         num_classes = dataset.num_classes
@@ -1190,11 +1231,11 @@ def main():
         path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
         dataset = Reddit(path, T.NormalizeFeatures())
         data = dataset[0]
-        data = data.to(device)
+        data = data.to(dev)
         data.x.requires_grad = True
-        inputs = data.x.to(device)
+        inputs = data.x.to(dev)
         inputs.requires_grad = True
-        data.y = data.y.to(device)
+        data.y = data.y.to(dev)
         edge_index = data.edge_index
         num_features = dataset.num_features
         num_classes = dataset.num_classes
@@ -1215,13 +1256,13 @@ def main():
         data = Data()
         data.y = torch.rand(n).uniform_(0, num_classes - 1).long()
         data.train_mask = torch.ones(n).long()
-        # edge_index = edge_index.to(device)
+        # edge_index = edge_index.to(dev)
         print(f"edge_index.size: {edge_index.size()}", flush=True)
         print(f"edge_index: {edge_index}", flush=True)
-        data = data.to(device)
+        data = data.to(dev)
         # inputs = inputs.to(device)
         inputs.requires_grad = True
-        data.y = data.y.to(device)
+        data.y = data.y.to(dev)
     elif graphname == 'subgraph3':
         # path = "/gpfs/alpine/bif115/scratch/alokt/HipMCL/"
         # print(f"Loading coo...", flush=True)
@@ -1240,9 +1281,9 @@ def main():
         data.y = torch.rand(n).uniform_(0, num_classes - 1).long()
         data.train_mask = torch.ones(n).long()
         print(f"edge_index.size: {edge_index.size()}", flush=True)
-        data = data.to(device)
+        data = data.to(dev)
         inputs.requires_grad = True
-        data.y = data.y.to(device)
+        data.y = data.y.to(dev)
     elif 'ogb' in graphname:
         path = '/scratch/general/nfs1/u1320844/dataset'
         path = '../data/'
@@ -1263,19 +1304,22 @@ def main():
         else:
             split_idx = dataset.get_idx_split()
             data = dataset[0]
+            print(data)
             data = data.to(device)
             train_idx = split_idx['train']
             val_idx = split_idx['valid']
             test_idx = split_idx['test']
 
         data.x.requires_grad = True
-        inputs = data.x.to(device)
+        inputs = data.x.to(dev)
         #inputs.requires_grad = True
-        data.y = data.y.squeeze().to(device)
+        data.y = data.y.squeeze().to(dev)
         edge_index = data.edge_index
         edge_index = symmetric(edge_index)
+        print('here')
         num_features = dataset.num_features if not 'mag' in graphname else 128
         num_classes = dataset.num_classes
+        data = data.to(dev)
         num_nodes = len(data.x)
         train_mask = torch.zeros(num_nodes)
         train_mask[train_idx] = 1
@@ -1296,7 +1340,7 @@ def main():
         adj_matrix = edge_index
 
 
-    init_process(rank, size, inputs, adj_matrix, data, num_features, num_classes, device, outputs, 
+    init_process(rank, size, inputs, adj_matrix, data, num_features, num_classes, device, host, outputs, 
                     run)
 
     if outputs is not None:
@@ -1328,6 +1372,7 @@ if __name__ == '__main__':
 
     acc_per_rank = args.accperrank
 
+    #torch.distributed.barrier(device_ids=0)
     epochs = args.epochs
     graphname = args.graphname
     timing = args.timing == "True"

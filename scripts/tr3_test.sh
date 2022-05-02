@@ -6,7 +6,7 @@ for mmorder in ssss sssd ssds ssdd sdss sdsd sdds sddd dsss dssd dsds dsdd ddss 
 do
     for rep in 1 2 4
     do
-        cmd="srun slurm_tr3.sh $input $hidden $rep $mmorder"
+        cmd="srun scripts/slurm_tr3.sh $input $hidden $rep $mmorder"
         echo $cmd
         $cmd
     done
