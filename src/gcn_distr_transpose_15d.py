@@ -220,11 +220,35 @@ def transpose_input(inputs,rank,size,row_group,dim):
     ht = (dim == 1)    
     # size//replication must be a power of 2
     rank_mask =  col_count - 1 
-    input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / col_count), dim=1-dim)    
+    split_size = [ math.ceil(float(inputs.size(1-dim)) / col_count) ] * col_count
+    split_size[col_count-1] = inputs.size(1-dim) - math.ceil(float(inputs.size(1-dim)) / col_count) * (col_count-1)
+    if split_size[col_count-1] <= 0:
+       split_sum = 0
+       for i in range(col_count):
+          split_size[i] = math.ceil((i+1)*float(inputs.size(1-dim)) / col_count) - split_sum
+          split_sum += split_size[i]
+    #print(split_size)
+    #exit()
+    #input_2d = torch.split(inputs, math.ceil(float(inputs.size(1-dim)) / col_count), dim=1-dim)    
+    input_2d = torch.split(inputs, split_size, dim=1-dim)
     recv = [None]*col_count
+    #print(dim_count)
     if dim == 0:
         for i in range(col_count):
-            dim_count[rep_id][1][i] = input_2d[i].size(1)
+            #print(i)
+            try:
+                dim_count[rep_id][1][i] = input_2d[i].size(1)
+            except:
+                print(f'Index error at redistribution at index {i} rep_id {rep_id}')
+                #print(f'Col processes per row panel {col_count}')
+                #print(f'Total number of cols {math.ceil(float(inputs.size(1-dim)))}')
+                #print(f'Cols per process {math.ceil(float(inputs.size(1-dim)) / col_count)}')
+                #print(dim_count[rep_id])
+                #print(dim_count[rep_id][1])
+                #print(input_2d)
+                #print(col_count)
+                #print(len(input_2d))
+                exit()
     
     #print('\ndim is '+str(dim))
     tstart_comm = start_time(row_group, rank)     
@@ -1058,7 +1082,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
         # dist.barrier(group)
         tstop = time.time()
-        total_time[i][rank] = tstop - tstart
+        total_time[i][rank] = tstop - tstart + ep_time
 
     # Get median runtime according to rank0 and print that run's breakdown
     dist.barrier(group)
