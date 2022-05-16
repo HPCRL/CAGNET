@@ -78,6 +78,7 @@ def start_time(group, rank, subset=False, src=None):
     dist.barrier(group)
     barrier_tstop = time.time()
     barrier_time[run][rank] += barrier_tstop - barrier_tstart
+    #if rank == 0:        print(f'barrier_time {barrier_tstop - barrier_tstart:0.6f}')
     if subset:
         barrier_subset_time[run][rank] += barrier_tstop - barrier_tstart
 
@@ -185,6 +186,7 @@ def outer_product2(inputs, ag, rank, size, group):
     global op2_comm_time
     global run
 
+    #if rank == 0 : print('weight_compute ',end='')
     tstart_comp = start_time(group, rank)
     # (H^(l-1))^T * (A * G^l)
     grad_weight = torch.mm(inputs, ag)
@@ -193,6 +195,7 @@ def outer_product2(inputs, ag, rank, size, group):
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
     
+    #if rank == 0 : print('weight_reduce ',end='')
     tstart_comm = start_time(group, rank)
     # reduction on grad_weight low-rank matrices
     dist.all_reduce(grad_weight, op=dist.reduce_op.SUM, group=group)
@@ -203,7 +206,7 @@ def outer_product2(inputs, ag, rank, size, group):
 
     return grad_weight
 
-def transpose_input(inputs,rank,size,row_group,dim):
+def transpose_input(inputs,rank,size,row_group,group,dim):
     #print('in transpose '+str(rank)+' at dim '+str(dim))
     global device
     global comm_time
@@ -251,7 +254,7 @@ def transpose_input(inputs,rank,size,row_group,dim):
                 exit()
     
     #print('\ndim is '+str(dim))
-    tstart_comm = start_time(row_group, rank)     
+    tstart_comm = start_time(group, rank)     
     for i in range(col_count):
         p_i = i^rank        
         il = p_i & rank_mask
@@ -284,7 +287,7 @@ def transpose_input(inputs,rank,size,row_group,dim):
     #print('row_group '+str(row_group))
     
     inputs = torch.cat(recv,dim)    
-    dur = stop_time(row_group, rank, tstart_comm)
+    dur = stop_time(group, rank, tstart_comm)
     comm_time[run][rank] += dur
     bcast_comm_time[run][rank] += dur
     return inputs
@@ -304,10 +307,13 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
     rep_id = rank//col_count
     inputs_ = inputs.detach().contiguous() #torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
     if horizontal_tiled:
-        inputs_ = transpose_input(inputs,rank,size,row_group,0)   
+        #if rank == 0: print('spmm_htv ',end='')
+        inputs_ = transpose_input(inputs,rank,size,row_group,group,0)   
         dist.barrier(row_group)
+        #if rank == 0:           print('spmm row group')
     else:
         dist.barrier(col_group)
+        #if rank == 0:           print('spmm col group')
     #print(am_partitions[0].size())
     #print(inputs_.size())
     z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
@@ -324,20 +330,21 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         else:
             row_recv = sum(dim_count[i][0])            
             inputs_recv = torch.cuda.FloatTensor(row_recv, inputs_.size(1), device=device).fill_(0)
-                                
-        tstart_comm = start_time(col_group, rank)        
+        #if rank == 0: print('spmm_bcast ',end='')                                
+        tstart_comm = start_time(group, rank)        
         dist.broadcast(inputs_recv, src=tile_id, group=col_group)        
-        dur = stop_time(col_group, rank, tstart_comm)
+        dur = stop_time(group, rank, tstart_comm)
         comm_time[run][rank] += dur
         bcast_comm_time[run][rank] += dur                
-        tstart_comp = start_time(col_group, rank)
+        #if rank == 0: print('spmm_compute ',end='')
+        tstart_comp = start_time(group, rank)
         #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
         #print(am_partitions[i].size())
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                             am_partitions[i].values(), am_partitions[i].size(0), 
                             am_partitions[i].size(1), inputs_recv, z_loc)
 
-        dur = stop_time(col_group, rank, tstart_comp)
+        dur = stop_time(group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
     
@@ -358,9 +365,12 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     col_count = size//replication
     rep_id = rank//col_count    
     inputs_recv = inputs 
+    #if rank == 0:        print('gemm start')
     if not horizontal_tiled:
+        #if rank == 0: print('gemm_h2v ',end='')
         inputs_recv = transpose_input(inputs,rank,size,row_group,1)
 
+    #if rank == 0:        print('gemm_comp ',end='')
     tstart_comp = start_time(group, rank)
     z = torch.mm(inputs_recv, weight)
     dur = stop_time(group, rank, tstart_comp)
@@ -442,33 +452,35 @@ class GCNFunc(torch.autograd.Function):
                 if input_ht:
                     ctx.input_h = inputs
                 else:
-                    input_h = transpose_input(inputs,rank,size,row_group,1)
+                    input_h = transpose_input(inputs,rank,size,row_group,group,1)
                     ctx.input_h = input_h
                     inputs = input_h
-            if rank == 0: print('forw horizontal '+str(rank),end=' -> ')
+            if rank == 0: print('forw horizontal '+str(rank),end=' ->')
             z = gemm_func(inputs, weight, rank, size, group, row_group, col_group, ht)
             z = spmm_func(am_partitions, z, rank, size, group, row_group, col_group, ht)
             
                 
         else:
-            if rank == 0: print('forw vertical '+str(rank),end=' -> ')
+            if rank == 0: print('forw vertical '+str(rank),end=' ->')
             # z = block_row(adj_matrix.t(), am_partitions, inputs, weight, rank, size)
             y1 = spmm_func( am_partitions, inputs, rank, size, group, row_group, col_group, ht)
             
             # Convert y1 to x1
-            
-            x1 = transpose_input(y1,rank,size,row_group,1)
+            #if rank == 0:                print('intra_layer_v2h ',end='') 
+            x1 = transpose_input(y1,rank,size,row_group,group,1)
             ctx.x1 = x1
             if order[1] == 's':
                 if input_ht:
                     ctx.input_h = inputs
                 else:
-                    input_h = transpose_input(inputs,rank,size,row_group,1)
+                    #if rank == 0:                        print('intralayer_extra_v2h ',end='')
+                    input_h = transpose_input(inputs,rank,size,row_group,group,1)
                     ctx.input_h = input_h
             z = gemm_func(x1, weight, rank, size, group, row_group, col_group, ht)
 
         if last_layer and not ht:
-            z = transpose_input(z,rank,size,row_group,1)
+            #if rank == 0: print('lastlayer_v2h ',end='')
+            z = transpose_input(z,rank,size,row_group,group,1)
         z.requires_grad = True                
         ctx.z = z
         #ht = not ht
@@ -535,7 +547,7 @@ class GCNFunc(torch.autograd.Function):
 
         #if rank == 0: print(grad_output.size(),end=', ')
         if order[1] == 'd':
-            if rank == 0: print('back horizontal '+str(rank),end=' -> ')
+            if rank == 0: print('back horizontal '+str(rank),end=' ->')
             x2 = gemm_func(grad_output, weight.t(), rank, size, group, row_group, col_group, ht)
             grad_input = spmm_func(am_partitions, x2 , rank, size, group, row_group, col_group, ht)
             # Second backprop equation (reuses the A * H^(l-1) computation)
@@ -545,12 +557,13 @@ class GCNFunc(torch.autograd.Function):
             grad_weight = outer_product2(x1.t(), grad_output, rank, size, group)
 
         else:
-            if rank == 0: print('back vertical '+str(rank),end=' -> ')
+            if rank == 0: print('back vertical '+str(rank),end=' ->')
             #print(grad_output.size())
             ag = spmm_func(am_partitions, grad_output, rank, size, group, row_group, col_group, ht)            
 
             # Convert ag to horizontal tiling
-            ag = transpose_input(ag,rank,size,row_group,1)
+            #if rank == 0: print('intralayer_v2h ',end='')
+            ag = transpose_input(ag,rank,size,row_group,group,1)
 
             #print('here')
             grad_input = gemm_func(ag, weight.t(), rank, size, group, row_group, col_group, ht)
@@ -566,7 +579,8 @@ class GCNFunc(torch.autograd.Function):
 
         if inputs.size(1) != grad_input.size(1) :
             dim = 0 if inputs.size(1) < grad_input.size(1) else 1
-            grad_input = transpose_input(grad_input,rank,size,row_group,dim)
+            #if rank == 0: print('weightupdate_redist ',end='')
+            grad_input = transpose_input(grad_input,rank,size,row_group,group,dim)
 
         # print('grad input '+str(grad_input[0]) + ' rank ' + str(rank))
         # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
@@ -600,7 +614,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
         #print('dim '+str(0 if inputs.size(1) < grad_input.size(1) else 1))
         #print(str(inputs.size()) + ' but got ' + str(grad_input.size()))
         rep_id = rank // (size // replication)
-        outputs = transpose_input(outputs,rank,size, row_groups[rep_id], 1)        
+        outputs = transpose_input(outputs,rank,size, row_groups[rep_id],group, 1)        
         rank_train_mask = torch.split(data.train_mask.bool(), v_size, dim=0)[rank]
         datay_rank = torch.split(data.y, v_size, dim=0)[rank]
 
