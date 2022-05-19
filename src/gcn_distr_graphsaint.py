@@ -483,7 +483,7 @@ class GCNFunc(torch.autograd.Function):
         # print('grad weight '+str(grad_weight[0]) + ' rank ' + str(rank))
         return grad_input, grad_weight, None, None, None, None, None, None
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, rank, size, group, horizontal_tiled):
+def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, rank, size, group, horizontal_tiled, labels, row_count):
     global ht
     ht = horizontal_tiled
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, F.relu)
@@ -494,16 +494,19 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
     optimizer.zero_grad()
     #rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[rank]
     #datay_rank = torch.split(data.y, outputs.size(0), dim=0)[rank]
-    rank_train_mask = torch.split(data.train_mask.bool(), row_count, dim=0)[rank]
-    datay_rank = torch.split(data.y, row_count, dim=0)[rank]
+    #rank_train_mask = torch.split(data.train_mask.bool(), row_count, dim=0)[rank]
+    #datay_rank = torch.split(data.y, row_count, dim=0)[rank]
+    print(labels.shape)
+    print(row_count)
+    datay_rank = torch.split(labels, row_count, dim=0)[rank]
 
     #print('backward')
     # Note: bool type removes warnings, unsure of perf penalty
     # loss = F.nll_loss(outputs[data.train_mask.bool()], data.y[data.train_mask.bool()])
-    if list(datay_rank[rank_train_mask].size())[0] > 0:
+    if list(datay_rank.size())[0] > 0:
         # print('normal loss')
     # if datay_rank.size(0) > 0:
-        loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
+        loss = F.nll_loss(outputs, datay_rank)
         # loss = F.nll_loss(outputs, torch.max(datay_rank, 1)[1])
         loss.backward()
     else:
@@ -712,7 +715,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     print(input_partitions[0].size())
     print(f"rank: {rankf} adj_matrix_loc.size: {adj_matrix_loc.size()}", flush=True)
     print(f"rank: {rankf} inputs.size: {inputs.size()}", flush=True)
-    return inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled
+    return inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled, row_count
 
 def run(rank, size, inputs, graphs, data, features, classes, device):
     # inputs: node feature
@@ -742,10 +745,16 @@ def run(rank, size, inputs, graphs, data, features, classes, device):
     print('Preprocessing - partitioning graph')
     for (nodes_subg, subg, norm_loss) in tqdm(graphs):
         # nodes_subg <- subg[sub_nodeid]
-        #inputs_subg = inputs[nodes_subg]
-        inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, subg, data,
+        #sug = symmetric(subg)
+        inputs_subg = inputs[nodes_subg.long()]
+        inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled, row_count = oned_partition(rank, size, inputs_subg, subg, data,
                                                                     features, classes, device)
-        train_loader.append((inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled, norm_loss))
+
+        labels_subg = data.y[nodes_subg.long()]
+        train_loader.append((inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled, norm_loss, labels_subg, row_count))
+        print(inputs.shape)
+        print(inputs_subg.shape)
+        print(inputs_loc.shape)
     #inputs_loc, adj_matrix_loc, am_pbyp, horizontal_tiled = oned_partition(rank, size, inputs, adj_matrix, data,
     #                                                            features, classes, device)
     #print('Preprocessing done')
@@ -821,14 +830,14 @@ def run(rank, size, inputs, graphs, data, features, classes, device):
             ep_s = time.time()
             # TODO test adding a loop for subgraphs in an epoch
             #print(f'{len(train_loader)} batches')
-            for i, (inputs_loc, adj_matrix_loc, am_pybp, horizontal_tiled, norm_loss) in enumerate(train_loader):
+            for i, (inputs_loc, adj_matrix_loc, am_pybp, horizontal_tiled, norm_loss, labels_subg, row_count) in enumerate(train_loader):
                 print(f'iter {i}')
                 inputs_loc = inputs_loc.to(device)
                 adj_matrix_loc = adj_matrix_loc.to(device)
                 for i in range(len(am_pbyp)):
                     am_pbyp[i] = am_pbyp[i].t().coalesce().to(device)
                 outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data,
-                                        rank, size, group, horizontal_tiled)
+                                        rank, size, group, horizontal_tiled, labels_subg, row_count)
             cumulative_time += time.time()-ep_s
             # TODO use full graph to get accuracy
             if accuracy:
@@ -1041,6 +1050,8 @@ def main():
             (node_ids, adj_subg, norm_loss) = minibatch.one_batch(mode='train')
             # adj_subg is in torch.sparse_coo format, needs to be in torch.tensor
             subgraphs.append((torch.from_numpy(node_ids), adj_subg, norm_loss))
+            #print(adj_subg.shape)
+            #exit()
         print(f'{len(subgraphs)} subgraphs')
         print(subgraphs[0])
         num_nodes = len(inputs)
