@@ -645,7 +645,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
 
     inputs = inputs.to(torch.device("cpu"))
     adj_matrix = adj_matrix.to(torch.device("cpu"))
-
+    print(f'adj matrix is {adj_matrix}')
 
     # Compute the adj_matrix and inputs partitions for this process
     # TODO: Maybe I do want grad here. Unsure.
