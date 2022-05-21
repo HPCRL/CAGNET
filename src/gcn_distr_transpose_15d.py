@@ -997,7 +997,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
     
     inputs_loc = inputs_loc.to(device)
-    adj_matrix_loc = adj_matrix_loc.to(device)
+    #adj_matrix_loc = adj_matrix_loc.to(device)
     for i in range(len(am_pbyp)):
         am_pbyp[i] = am_pbyp[i].coalesce().to(device)
 
@@ -1324,6 +1324,32 @@ def main():
         data.train_mask = train_mask
         data.val_mask = val_mask
         data.test_mask = test_mask
+
+    elif graphname == 'com-orkut':
+        edge_index = torch.load('/scratch/general/nfs1/u1320844/dataset/com_orkut/com-orkut.pt')
+        print(f"Done loading coo", flush=True)
+        n = 3072441
+        n = 3072627
+        num_features = 128
+        num_classes = 100
+        inputs = torch.rand(n, num_features)
+        data = Data()
+        data.y = torch.rand(n).uniform_(0, num_classes-1).long()
+        data.train_mask = torch.ones(n).long()
+        inputs.requires_grad = True
+        data.y = data.y.to(device)
+    elif graphname == 'web-google':
+        edge_index = torch.load('/scratch/general/nfs1/u1320844/dataset/web_google/web-Google.pt')
+        print(f"Done loading coo", flush=True)
+        n = 916428
+        num_features = 256
+        num_classes = 100
+        inputs = torch.rand(n, num_features)
+        data = Data()
+        data.y = torch.rand(n).uniform_(0, num_classes-1).long()
+        data.train_mask = torch.ones(n).long()
+        inputs.requires_grad = True
+        data.y = data.y.to(device)
 
     if download:
         exit()
