@@ -297,8 +297,8 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         dist.barrier(col_group)
     #print(am_partitions[0].size())
     #print(inputs_.size())
-    #z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
-    z_loc = torch.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=dev).fill_(0)
+    z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
+    #z_loc = torch.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=dev).fill_(0)
     rank_col = rank % col_count
     
     for i in range(replication):  
@@ -311,7 +311,8 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
             inputs_recv = inputs_
         else:
             row_recv = sum(dim_count[i][0])            
-            inputs_recv = torch.cuda.FloatTensor(row_recv, inputs_.size(1), device=dev).fill_(0)
+            inputs_recv = torch.FloatTensor(row_recv, inputs_.size(1), device=dev).fill_(0) 
+            
                                 
         tstart_comm = start_time(col_group, rank)        
         dist.broadcast(inputs_recv, src=tile_id, group=col_group)        
@@ -321,9 +322,9 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         tstart_comp = start_time(col_group, rank)
         #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
         #print(am_partitions[i].size())
-#        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
-#                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
-#                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
+        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
+                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
+                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
 
 #        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
 #                            am_partitions[i].values(), am_partitions[i].size(0),
@@ -331,7 +332,7 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         dur = stop_time(col_group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
-    #z_loc = z_loc.to(dev)
+    z_loc = z_loc.to(dev)
     #dist.barrier(col_group)    
     return z_loc
 
@@ -357,8 +358,8 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     if not horizontal_tiled:
         inputs_recv = transpose_input(inputs,rank,size,row_group,1)
 
-    #inputs_recv = inputs_recv.to(device)
-    #weight = weight.to(device)
+    inputs_recv = inputs_recv.to(device)
+    weight = weight.to(device)
     tstart_comp = start_time(group, rank)
     z = torch.mm(inputs_recv, weight)
     dur = stop_time(group, rank, tstart_comp)
@@ -367,7 +368,7 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     
     #dist.barrier(row_group,device_ids=[0])
     dist.barrier(row_group)
-    #z = z.to(dev)
+    z = z.to(dev)
 
     return z
 
@@ -634,7 +635,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
         loss.backward()
     else:
         print('fake loss')
-        fake_loss = (outputs * torch.cuda.FloatTensor(outputs.size(), device=device).fill_(0)).sum()
+        fake_loss = (outputs * torch.FloatTensor(outputs.size(), device=device).fill_(0)).sum()
         # fake_loss = (outputs * torch.zeros(outputs.size())).sum()
         fake_loss.backward()
 
@@ -1114,9 +1115,9 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device, host):
         print(f"total_times_r0: {total_times_r0}")
         median_run_time = statistics.median(total_times_r0)
         median_idx = total_times_r0.index(median_run_time)
-        median_idx = torch.cuda.LongTensor([median_idx])
+        median_idx = torch.LongTensor([median_idx])
     else:
-        median_idx = torch.cuda.LongTensor([0])
+        median_idx = torch.LongTensor([0])
         
     dist.broadcast(median_idx, src=0, group=group)        
     median_idx = median_idx.item()
@@ -1216,11 +1217,13 @@ def main():
         devid = rank_to_devid(rank, acc_per_rank)
         device = torch.device('cuda:{}'.format(devid))
         host = torch.device('cpu')
+        #device = host
         print(f"device: {device}")
-        torch.cuda.set_device(device)
-        curr_devid = torch.cuda.current_device()
+        print(f'host: {host}')
+        #torch.cuda.set_device(device)
+        #curr_devid = torch.cuda.current_device()
         # print(f"curr_devid: {curr_devid}", flush=True)
-        devcount = torch.cuda.device_count()
+        #devcount = torch.cuda.device_count()
 
     dev = host
     if graphname == "Cora":
@@ -1318,7 +1321,7 @@ def main():
             val_idx = split_idx['valid']
             test_idx = split_idx['test']
 
-        data.x.requires_grad = True
+        #data.x.requires_grad = True
         inputs = data.x.to(dev)
         #inputs.requires_grad = True
         data.y = data.y.squeeze().to(dev)
