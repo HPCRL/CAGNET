@@ -297,7 +297,8 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         dist.barrier(col_group)
     #print(am_partitions[0].size())
     #print(inputs_.size())
-    z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
+    #z_loc = torch.cuda.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=device).fill_(0)
+    z_loc = torch.FloatTensor(am_partitions[rep_id].size(0), inputs_.size(1), device=dev).fill_(0)
     rank_col = rank % col_count
     
     for i in range(replication):  
@@ -320,14 +321,17 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         tstart_comp = start_time(col_group, rank)
         #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
         #print(am_partitions[i].size())
-        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
-                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
-                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
+#        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
+#                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
+#                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
 
+#        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
+#                            am_partitions[i].values(), am_partitions[i].size(0),
+#                            am_partitions[i].size(1), inputs_recv, z_loc)
         dur = stop_time(col_group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
-    z_loc = z_loc.to(dev)
+    #z_loc = z_loc.to(dev)
     #dist.barrier(col_group)    
     return z_loc
 
@@ -353,8 +357,8 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     if not horizontal_tiled:
         inputs_recv = transpose_input(inputs,rank,size,row_group,1)
 
-    inputs_recv = inputs_recv.to(device)
-    weight = weight.to(device)
+    #inputs_recv = inputs_recv.to(device)
+    #weight = weight.to(device)
     tstart_comp = start_time(group, rank)
     z = torch.mm(inputs_recv, weight)
     dur = stop_time(group, rank, tstart_comp)
@@ -363,7 +367,7 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     
     #dist.barrier(row_group,device_ids=[0])
     dist.barrier(row_group)
-    z = z.to(dev)
+    #z = z.to(dev)
 
     return z
 
@@ -410,6 +414,9 @@ class GCNFunc(torch.autograd.Function):
         # func: sigma
 
         # adj_matrix = adj_matrix.to_dense()
+        print(f'inputs are {inputs}')
+        print(f'weight is {weight}')
+        print(f'adj_matrix is {adj_matrix}')
         ctx.save_for_backward(inputs, weight, adj_matrix)
         ctx.am_partitions = am_partitions
         ctx.rank = rank
@@ -496,6 +503,7 @@ class GCNFunc(torch.autograd.Function):
         global x1
 
         if ctx.rank == 0: print('grad back '+str(grad_output.size()))
+        print(f'saved tensors is {ctx.saved_tensors}')
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
@@ -755,7 +763,7 @@ def symmetric(adj_matrix):
    
     adj_matrix, _ = add_remaining_self_loops(adj_matrix) 
    
-    adj_matrix.to(device)
+    #adj_matrix.to(device)
     return adj_matrix
     
 def get_proc_groups(rank, size):
