@@ -450,6 +450,9 @@ class GCNFunc(torch.autograd.Function):
 
         #f ctx.rank == 0: print('grad back '+str(grad_output.size()))
         inputs, weight, adj_matrix = ctx.saved_tensors
+        print(f'inputs {inputs}')
+        print(f'weight {weight}')
+        print(f'adj_matrix {adj_matrix}')
         am_partitions = ctx.am_partitions
         rank = ctx.rank
         size = ctx.size

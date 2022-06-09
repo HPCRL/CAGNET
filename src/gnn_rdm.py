@@ -415,9 +415,9 @@ class GCNFunc(torch.autograd.Function):
         # func: sigma
 
         # adj_matrix = adj_matrix.to_dense()
-        print(f'inputs are {inputs}')
-        print(f'weight is {weight}')
-        print(f'adj_matrix is {adj_matrix}')
+        #print(f'inputs are {inputs}')
+        #print(f'weight is {weight}')
+        #print(f'adj_matrix is {adj_matrix}')
         ctx.save_for_backward(inputs, weight, adj_matrix)
         ctx.am_partitions = am_partitions
         ctx.rank = rank
@@ -503,8 +503,8 @@ class GCNFunc(torch.autograd.Function):
         global ht
         global x1
 
-        if ctx.rank == 0: print('grad back '+str(grad_output.size()))
-        print(f'saved tensors is {ctx.saved_tensors}')
+        #if ctx.rank == 0: print('grad back '+str(grad_output.size()))
+        #print(f'saved tensors is {ctx.saved_tensors}')
         inputs, weight, adj_matrix = ctx.saved_tensors
         am_partitions = ctx.am_partitions
         rank = ctx.rank
