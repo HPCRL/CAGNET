@@ -186,15 +186,41 @@ def outer_product2(inputs, ag, rank, size, group):
     global dcomp_time
     global op2_comm_time
     global run
+    
+    dev = inputs.get_device()
+    if dev == -1:
+        dev = host
 
+    tstart_comm = start_time(group, rank)
+
+    inp = inputs.to(device)
+    agd = ag.to(device)
+
+    dur = stop_time(group, rank, tstart_comm)
+    comm_time[run][rank] += dur
+    op1_comm_time[run][rank] += dur    
+    
+ 
     tstart_comp = start_time(group, rank)
     # (H^(l-1))^T * (A * G^l)
-    grad_weight = torch.mm(inputs, ag)
+    grad_weight_dev = torch.mm(inp, agd)
 
     dur = stop_time(group, rank, tstart_comp)
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
     
+
+    tstart_comm = start_time(group, rank)
+
+    grad_weight = grad_weight_dev.to(dev)
+
+    dur = stop_time(group, rank, tstart_comm)
+    comm_time[run][rank] += dur
+    op1_comm_time[run][rank] += dur
+
+    
+
+
     tstart_comm = start_time(group, rank)
     # reduction on grad_weight low-rank matrices
     dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=group)
@@ -202,6 +228,7 @@ def outer_product2(inputs, ag, rank, size, group):
     dur = stop_time(group, rank, tstart_comm)
     comm_time[run][rank] += dur
     op2_comm_time[run][rank] += dur
+
 
     return grad_weight
 
@@ -268,6 +295,7 @@ def transpose_input(inputs,rank,size,row_group,dim):
     dur = stop_time(row_group, rank, tstart_comm)
     comm_time[run][rank] += dur
     bcast_comm_time[run][rank] += dur
+    print(f'bcast time is {dur:0.3f} ',end='')
     return inputs
 
 
@@ -318,13 +346,23 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         dist.broadcast(inputs_recv, src=tile_id, group=col_group)        
         dur = stop_time(col_group, rank, tstart_comm)
         comm_time[run][rank] += dur
-        bcast_comm_time[run][rank] += dur                
+        bcast_comm_time[run][rank] += dur        
+        tstart_comm = start_time(group, rank)
+        amp_ind0 = am_partitions[i].indices()[0].int().to(device)
+        amp_ind1 = am_partitions[i].indices()[1].int().to(device)
+        amp_val  = am_partitions[i].values().to(device)
+        inp      = inputs_recv.to(device)
+        dur = stop_time(group, rank, tstart_comm)
+        comm_time[run][rank] += dur
+        op1_comm_time[run][rank] += dur
+        
         tstart_comp = start_time(col_group, rank)
         #print('SpMM input '+str(inputs_recv.size())+" output "+str(z_loc.size()) + ' at rank '+str(rank))
         #print(am_partitions[i].size())
-        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
-                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
-                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
+        spmm_gpu(amp_ind0, amp_ind1, amp_val, am_partitions[i].size(0), am_partitions[i].size(1), inp, z_loc)
+#        spmm_gpu(am_partitions[i].indices()[0].int().to(device), am_partitions[i].indices()[1].int().to(device), 
+#                            am_partitions[i].values().to(device), am_partitions[i].size(0), 
+#                            am_partitions[i].size(1), inputs_recv.to(device), z_loc.to(device))
 
 #        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
 #                            am_partitions[i].values(), am_partitions[i].size(0),
@@ -332,7 +370,11 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
         dur = stop_time(col_group, rank, tstart_comp)
         comp_time[run][rank] += dur
         scomp_time[run][rank] += dur
+    tstart_comm = start_time(group, rank)
     z_loc = z_loc.to(dev)
+    dur = stop_time(group, rank, tstart_comm)
+    comm_time[run][rank] += dur
+    op1_comm_time[run][rank] += dur
     #dist.barrier(col_group)    
     return z_loc
 
@@ -358,8 +400,12 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     if not horizontal_tiled:
         inputs_recv = transpose_input(inputs,rank,size,row_group,1)
 
+    tstart_comm = start_time(group, rank)
     inputs_recv = inputs_recv.to(device)
     weight = weight.to(device)
+    dur = stop_time(group, rank, tstart_comm)
+    comm_time[run][rank] += dur
+    op1_comm_time[run][rank] += dur
     tstart_comp = start_time(group, rank)
     z = torch.mm(inputs_recv, weight)
     dur = stop_time(group, rank, tstart_comp)
@@ -368,8 +414,11 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     
     #dist.barrier(row_group,device_ids=[0])
     dist.barrier(row_group)
+    tstart_comm = start_time(group, rank)
     z = z.to(dev)
-
+    dur = stop_time(group, rank, tstart_comm)
+    comm_time[run][rank] += dur
+    op1_comm_time[run][rank] += dur
     return z
 
 def dist_nll(outputs,labels,row_group,rank):
@@ -635,7 +684,10 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
         loss.backward()
     else:
         print('fake loss')
-        fake_loss = (outputs * torch.FloatTensor(outputs.size(), device=device).fill_(0)).sum()
+        dev = outputs.get_device()
+        if dev == -1:
+            dev = host
+        fake_loss = (outputs * torch.FloatTensor(outputs.size(), device=dev).fill_(0)).sum()
         # fake_loss = (outputs * torch.zeros(outputs.size())).sum()
         fake_loss.backward()
 
@@ -1131,7 +1183,7 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device, host):
         print(f"rank: {rank} bcast_comm_time: {bcast_comm_time[median_idx][rank]}")
         print(f"rank: {rank} barrier_time: {barrier_time[median_idx][rank]}")
         print(f"rank: {rank} barrier_subset_time: {barrier_subset_time[median_idx][rank]}")
-        print(f"rank: {rank} op1_comm_time: {op1_comm_time[median_idx][rank]}")
+        print(f"rank: {rank} pcie_comm_time: {op1_comm_time[median_idx][rank]}")
         print(f"rank: {rank} op2_comm_time: {op2_comm_time[median_idx][rank]}")
         print(f"rank: {rank} {outputs}")
     
