@@ -692,9 +692,12 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
     else:
         print('fake loss')
         dev = outputs.get_device()
+        fake_loss = None
         if dev == -1:
-            dev = host
-        fake_loss = (outputs * torch.FloatTensor(outputs.size(), device=dev).fill_(0)).sum()
+            dev = host              
+            fake_loss = (outputs * torch.FloatTensor(outputs.size(), device=dev).fill_(0)).sum()
+        else:       
+            fake_loss = (outputs * torch.cuda.FloatTensor(outputs.size(), device=dev).fill_(0)).sum()
         # fake_loss = (outputs * torch.zeros(outputs.size())).sum()
         fake_loss.backward()
 
