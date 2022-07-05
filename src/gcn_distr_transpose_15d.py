@@ -309,10 +309,10 @@ def spmm_func(am_partitions, inputs, rank, size, group, row_group, col_group, ho
     if horizontal_tiled:
         #if rank == 0: print('spmm_htv ',end='')
         inputs_ = transpose_input(inputs,rank,size,row_group,group,0)   
-        dist.barrier(row_group)
+        #dist.barrier(row_group)
         #if rank == 0:           print('spmm row group')
-    else:
-        dist.barrier(col_group)
+    #else:
+        #dist.barrier(col_group)
         #if rank == 0:           print('spmm col group')
     #print(am_partitions[0].size())
     #print(inputs_.size())
@@ -360,7 +360,7 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     global bcast_comm_time
     global run
 
-    dist.barrier(row_group)
+    dist.barrier(group)
     #print('gemm at rank '+str(rank))
     col_count = size//replication
     rep_id = rank//col_count    
@@ -377,7 +377,7 @@ def gemm_func(inputs, weight, rank, size, group, row_group, col_group, horizonta
     comp_time[run][rank] += dur
     dcomp_time[run][rank] += dur
     
-    dist.barrier(row_group)
+    dist.barrier(group)
 
     return z
 
