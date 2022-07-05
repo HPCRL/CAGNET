@@ -1069,6 +1069,44 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
         dist.barrier(group)
         tstart = time.time()
 
+        print()
+        # measure copy times
+        '''
+        for row_size in range(10_000,1_000_001,100_000): #[1024,10_000,100_000]:
+            host = torch.device('cpu')
+            cols = 512
+            send = torch.FloatTensor(row_size, cols, device=host).fill_(0)
+            send.pin_memory()
+            torch.cuda.synchronize()
+            s_start = time.time()
+            recv = send.to(device)
+            torch.cuda.synchronize()
+            s_end = time.time()
+            #recv.pin_memory()
+            csize = row_size * cols
+            print(f'h2d send time for {csize*4} Bytes is {s_end-s_start} BW is {4*csize/(s_end-s_start)/1e9} GB/sec')
+            # get it back
+            torch.cuda.synchronize()
+            s_start = time.time()
+            send = recv.to(host)
+            torch.cuda.synchronize()
+            s_end = time.time()
+            print(f'd2h send time for {csize*4} Bytes is {s_end-s_start} BW is {4*csize/(s_end-s_start)/1e9} GB/sec')
+            s_start = time.time()
+            torch.cuda.synchronize()
+            recv = send.to(device)
+            torch.cuda.synchronize()
+            s_end = time.time()
+            csize = row_size * cols
+            print(f'h2d send time for {csize*4} Bytes is {s_end-s_start}')
+            # get it back
+            torch.cuda.synchronize()
+            s_start = time.time()
+            h_recv = recv.to(host)
+            torch.cuda.synchronize()
+            s_end = time.time()
+            print(f'd2h send time for {csize*4} Bytes is {s_end-s_start}')
+        '''
         # for epoch in range(1, 201):
         print(f"\nStarting training... rank {rank} run {i}", flush=True)
         for epoch in range(1, epochs):            
