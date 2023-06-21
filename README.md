@@ -14,6 +14,8 @@ This repo is built based on CAGNET: Communication-Avoiding Graph Neural nETworks
 - ogb 
 - sparse-extension 
 
+The installation of torch-geometric can be a bit tricky. We recommend to install torch-scatter and torch-sparse using pre-built wheels at https://data.pyg.org/whl/torch-1.9.1%2Bcu111.html 
+
 This code uses C++ extensions from CAGNET. To compile these, run
 
 ```bash
