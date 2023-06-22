@@ -462,7 +462,8 @@ class GCNFunc(torch.autograd.Function):
         input_ht = ht
         if order == "dd":
             print("ERROR: Suboptimal computation configuration. SpMM should be the first op in either forward or backward. Quitting...")
-            exit()
+            # return -1
+            # exit()
         z = 0
         #if rank == 0: print(inputs.size(),end=', ')
         if order[0] == 'd':
@@ -609,8 +610,11 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, order,
     global run
 
     order1 = order[0] + order[3]
-    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order1, False, F.relu)
     order2 = order[1] + order[2]
+    if order1 == "dd" or order2 == 'dd':
+        print("ERROR: Suboptimal computation configuration. SpMM should be the first op in either forward or backward. Quitting...")
+        return -1
+    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order1, False, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, rank, size, group, row_groups, col_groups, order2, True, F.log_softmax)
 
     # print(outputs)
@@ -1006,13 +1010,13 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
     if rank >= size:
         return
-    candidate_orders = ['sdsd', 'dsds', 'ssss']
+    #candidate_orders = ['sdsd', 'dsds', 'ssss']
 
     # TODO deal with suboptimal orders
-    #candidate_orders = ['ssss', 'sdss', 'dsss', 'ddss',
-    #                    'sssd', 'sdsd', 'dssd', 'ddsd',
-    #                    'ssds', 'sdds', 'dsds', 'ddds',
-    #                    'ssdd', 'sddd', 'dsdd', 'dddd']
+    candidate_orders = ['dssd', 'ssss', 'sdss', 'dsss', 'ddss',
+                        'sssd', 'sdsd', 'dssd', 'ddsd',
+                        'ssds', 'sdds', 'dsds', 'ddds',
+                        'ssdd', 'sddd', 'dsdd', 'dddd']
     best_time = 1e9 
     best_order = '' 
 
@@ -1064,11 +1068,16 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 
         timing_on = timing == True
         timing = False
-        # 3 dry runs 
+        # 3  runs 
         print(f'mmorder:{c}; HT:{ht}\n')
+        # outputs = None
         for _ in range(3):
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, c, data, 
                             rank, size, group, row_groups, col_groups, ht, dry=True)
+            if isinstance(outputs, int):
+                break
+        if isinstance(outputs, int):
+            continue
         # get cur_time
         tstop_0 = time.time()
         cur_time = tstop_0 - tstart_0
