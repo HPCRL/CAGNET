@@ -1,4 +1,4 @@
-# RNN-RDM
+# GNN-RDM
 Repo for paper Communication Optimization for Distributed Execution of Graph Neural Networks.
 This repo is built based on CAGNET: Communication-Avoiding Graph Neural nETworks
 
