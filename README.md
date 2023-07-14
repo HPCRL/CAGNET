@@ -1,6 +1,7 @@
 # GNN-RDM
 Repo for paper Communication Optimization for Distributed Execution of Graph Neural Networks.
 This repo is built based on CAGNET: Communication-Avoiding Graph Neural nETworks
+RDM is a distributed solution hence it runs with at least 2 GPUs. In cases when there is only 1 GPU available, user can simply run sequential GCN.
 
 ## Dependencies 
 - Python 3.7.11
@@ -39,6 +40,7 @@ We reuse the flags from CAGNET:
 - `--replication <int>` : Replication factor  
 - `--download <True/False>` : Download datasets
 
+
 ## Running with slurm on RI2 
 
 Our implementation of redistribution of dense matrices is at `src/gcn_distr_transpose_15d.py`
@@ -73,6 +75,11 @@ world_size=$SLURM_NTASKS`
 Then they can be passed through a python command:
 
 `python -m torch.distributed.launch --nproc_per_node=1 --nnodes=$world_size --node_rank=$rank --master_addr=$master_addr --master_port=$master_port gcn_distr_transpose_15d.py --accperrank=1 --epochs=100 --graphname=Reddit --timing=True --midlayer=128 --runcount=1 --replication=1`
+
+## Simple example
+The command below will run the script based on the number of available GPUs for a single machine.
+
+`python scripts/run_example.py  <dataset> <midlayer> <replication>`
 
 ## Citation
 
